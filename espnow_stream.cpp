@@ -60,7 +60,7 @@ static void  sendFrameStart(uint16_t w, uint16_t h, uint32_t size, uint16_t tota
 static void  sendFrameChunk(uint16_t chunkIdx, uint16_t total, const uint8_t* data, uint16_t len);
 static void  sendFrameEnd();
 static void  switchCamToJpeg(const CamSettings& cfg);
-static void  switchCamToRgb565(const CamSettings& cfg);
+static void  switchCamToRgb565(const CamSettings& cfg, bool resumeCamera);
 
 // ─── ESP-NOW callbacks (WiFi task) ────────────────────────────────
 static void onSent(const uint8_t* mac, esp_now_send_status_t status) {
@@ -113,9 +113,9 @@ void espnow_stream_init() {
 }
 
 // ─── espnow_stream_deinit ─────────────────────────────────────────
-void espnow_stream_deinit() {
+void espnow_stream_deinit(bool resumeCamera) {
     if (!s_initialized) return;
-    espnow_stream_stop();
+    espnow_stream_stop(resumeCamera);
     esp_now_unregister_send_cb();
     esp_now_unregister_recv_cb();
     esp_now_deinit();
@@ -143,18 +143,19 @@ void espnow_stream_start() {
 }
 
 // ─── espnow_stream_stop ───────────────────────────────────────────
-void espnow_stream_stop() {
+void espnow_stream_stop(bool resumeCamera) {
     extern volatile bool camPauseRequest;
     extern volatile bool camPausedAck;
 
     if (s_camJpegMode) {
-        // camTask is already paused — switchCamToRgb565 will resume it
+        // camTask is already paused — switchCamToRgb565 will conditionally resume it
         extern CamSettings camCfg;
-        switchCamToRgb565(camCfg);
+        switchCamToRgb565(camCfg, resumeCamera);
     } else {
-        // Streaming never connected, camTask is running normally
-        // Make sure camPauseRequest is released (safety)
-        camPauseRequest = false;
+        // Streaming never connected, camTask is running normally or paused by caller
+        if (resumeCamera) {
+            camPauseRequest = false;
+        }
     }
     s_state     = STREAM_IDLE;
     s_peerAdded = false;
@@ -322,7 +323,7 @@ static void switchCamToJpeg(const CamSettings& cfg) {
                   STREAM_JPEG_QUALITY);
 }
 
-static void switchCamToRgb565(const CamSettings& cfg) {
+static void switchCamToRgb565(const CamSettings& cfg, bool resumeCamera) {
     if (!s_camJpegMode) return;
     extern volatile bool camPauseRequest;
     extern volatile bool camPausedAck;
@@ -333,17 +334,21 @@ static void switchCamToRgb565(const CamSettings& cfg) {
     camera_init_rgb565(cfg);
     s_camJpegMode = false;
 
-    // Now release camTask
-    camPauseRequest = false;
-    uint32_t t = millis();
-    while (camPausedAck) {
-        delay(1);
-        if (millis() - t > 2000) {
-            Serial.println("[STREAM] camTask resume timeout!");
-            break;
+    if (resumeCamera) {
+        // Now release camTask
+        camPauseRequest = false;
+        uint32_t t = millis();
+        while (camPausedAck) {
+            delay(1);
+            if (millis() - t > 2000) {
+                Serial.println("[STREAM] camTask resume timeout!");
+                break;
+            }
         }
+        Serial.println("[STREAM] Camera → RGB565 mode | camTask resumed");
+    } else {
+        Serial.println("[STREAM] Camera → RGB565 mode | camTask kept paused");
     }
-    Serial.println("[STREAM] Camera → RGB565 mode | camTask resumed");
 }
 
 // ─── captureAndStream ─────────────────────────────────────────────

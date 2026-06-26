@@ -144,8 +144,9 @@ static void flood_fill_seed(struct quirc *q, int x, int y, int from, int to,
 
   lifo_t lifo;
   size_t lifo_len;
-  lifo_alloc_all(&lifo, &lifo_len, sizeof(xylf_t));
-  //late in first out. 申请xylf_t的lifo，一次申请完，长度存储在lifo_len中
+  if (!q->lifo_buffer) return;
+  lifo_alloc_all(q->lifo_buffer, &lifo, &lifo_len, sizeof(xylf_t));
+  //late in first out. 申请xylf_t of lifo, length stored in lifo_len
 
   for (;;)
   {
@@ -264,11 +265,12 @@ static void threshold(struct quirc *q)
   if (threshold_s < THRESHOLD_S_MIN)
     threshold_s = THRESHOLD_S_MIN;
 
+  int *row_average = (int *)malloc(q->w * sizeof(int));
+  if (!row_average) return;
+
   for (y = 0; y < q->h; y++)
   {
-    int row_average[q->w];
-
-    memset(row_average, 0, sizeof(row_average));
+    memset(row_average, 0, q->w * sizeof(int));
 
     for (x = 0; x < q->w; x++)
     {
@@ -307,6 +309,7 @@ static void threshold(struct quirc *q)
 
     row += q->w;
   }
+  free(row_average);
 }
 
 static void area_count(void *user_data, int y, int left, int right)

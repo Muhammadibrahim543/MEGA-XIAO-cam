@@ -18,35 +18,53 @@
 #include <string.h>
 #include "quirc_internal.h"
 #include <Arduino.h>
+#include <esp_heap_caps.h>
 
 const char *quirc_version(void)
 {
   return "1.0";
 }
 
-//static struct quirc _q;
 struct quirc *quirc_new(void)
 {
-  struct quirc *q = ps_malloc(sizeof(*q));
+  struct quirc *q = (struct quirc *)heap_caps_malloc(sizeof(*q), MALLOC_CAP_SPIRAM);
 
   if (!q)
     return NULL;
 
   memset(q, 0, sizeof(*q));
+
+  q->lifo_buffer = heap_caps_malloc(65536, MALLOC_CAP_SPIRAM);
+  if (!q->lifo_buffer) {
+    heap_caps_free(q);
+    return NULL;
+  }
+
   return q;
 }
 
 void quirc_destroy(struct quirc *q)
 {
-  if (q->image)
-    if (q->image)
-      free(q->image);
-  if (sizeof(*q->image) != sizeof(*q->pixels))
-    if (q->pixels)
-      free(q->pixels);
+  if (!q) return;
 
-  if (q)
-    free(q);
+  if (q->image)
+  {
+    heap_caps_free(q->image);
+  }
+  if (sizeof(*q->image) != sizeof(*q->pixels))
+  {
+    if (q->pixels)
+    {
+      heap_caps_free(q->pixels);
+    }
+  }
+
+  if (q->lifo_buffer)
+  {
+    heap_caps_free(q->lifo_buffer);
+  }
+
+  heap_caps_free(q);
 }
 
 //static quirc_pixel_t img_buf[320*240];
@@ -54,9 +72,9 @@ int quirc_resize(struct quirc *q, int w, int h)
 {
   if (q->image)
   {
-    free(q->image);
+    heap_caps_free(q->image);
   }
-  uint8_t *new_image = ps_malloc(w * h);
+  uint8_t *new_image = (uint8_t *)heap_caps_malloc(w * h, MALLOC_CAP_SPIRAM);
 
   if (!new_image)
     return -1;
@@ -65,11 +83,11 @@ int quirc_resize(struct quirc *q, int w, int h)
   { //should gray, 1==1
     size_t new_size = w * h * sizeof(quirc_pixel_t);
     if (q->pixels)
-      free(q->pixels);
-    quirc_pixel_t *new_pixels = ps_malloc(new_size);
+      heap_caps_free(q->pixels);
+    quirc_pixel_t *new_pixels = (quirc_pixel_t *)heap_caps_malloc(new_size, MALLOC_CAP_SPIRAM);
     if (!new_pixels)
     {
-      free(new_image);
+      heap_caps_free(new_image);
       return -1;
     }
     q->pixels = new_pixels;

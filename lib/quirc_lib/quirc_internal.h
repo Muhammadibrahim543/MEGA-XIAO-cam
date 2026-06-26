@@ -93,6 +93,8 @@ struct quirc
 
   int num_grids;
   struct quirc_grid grids[QUIRC_MAX_GRIDS];
+
+  void *lifo_buffer;
 } __attribute__((aligned(8)));
 
 /************************************************************************

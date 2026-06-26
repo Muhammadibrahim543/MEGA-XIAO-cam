@@ -84,7 +84,7 @@ void espnow_stream_tick();
 
 // Start/stop streaming
 void espnow_stream_start();
-void espnow_stream_stop();
+void espnow_stream_stop(bool resumeCamera = true);
 
 // Broadcast a new handshake (re-scan for receiver)
 void espnow_stream_scan();
@@ -97,7 +97,7 @@ const StreamStats& espnow_stream_stats();
 bool espnow_stream_active();
 
 // Deinit (called when leaving SCR_ESPNOW screen)
-void espnow_stream_deinit();
+void espnow_stream_deinit(bool resumeCamera = true);
 
 // ─── Frame rate target ────────────────────────────────────────────
 extern uint32_t g_streamFrameIntervalMs;  // default 80 ms (~12 FPS, was 150ms ~6 FPS)

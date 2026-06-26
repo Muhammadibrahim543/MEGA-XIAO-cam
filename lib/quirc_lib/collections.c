@@ -4,6 +4,10 @@
  */
 
 #include "collections.h"
+#include <string.h>
+#include <stdlib.h>
+#include <esp_heap_caps.h>
+
 #define CHAR_BITS (sizeof(char) * 8)
 #define CHAR_MASK (CHAR_BITS - 1)
 #define CHAR_SHIFT IM_LOG2(CHAR_MASK)
@@ -17,24 +21,22 @@ void lifo_alloc(lifo_t *ptr, size_t size, size_t data_len)
   ptr->len = 0;
   ptr->size = size;
   ptr->data_len = data_len;
-  ptr->data = (char *)ps_malloc(size * data_len);
+  ptr->data = (char *)heap_caps_malloc(size * data_len, MALLOC_CAP_SPIRAM);
 }
 
-void lifo_alloc_all(lifo_t *ptr, size_t *size, size_t data_len)
+void lifo_alloc_all(void *buffer, lifo_t *ptr, size_t *size, size_t data_len)
 {
-  ptr->data = (char *)ps_malloc(255);
+  ptr->data = (char *)buffer;
+  ptr->size = 65536 / data_len;
   ptr->data_len = data_len;
-  ptr->size = 255 / data_len;
   ptr->len = 0;
   *size = ptr->size;
 }
 
+
 void lifo_free(lifo_t *ptr)
 {
-  if (ptr->data)
-  {
-    free(ptr->data);
-  }
+  // No-op. Preallocated buffer is managed by struct quirc
 }
 
 void lifo_clear(lifo_t *ptr)
@@ -59,6 +61,7 @@ bool lifo_is_not_full(lifo_t *ptr)
 
 void lifo_enqueue(lifo_t *ptr, void *data)
 {
+  if (ptr->len >= ptr->size) return; // Prevent heap corruption
   memcpy(ptr->data + (ptr->len * ptr->data_len), data, ptr->data_len);
 
   ptr->len += 1;
@@ -66,6 +69,7 @@ void lifo_enqueue(lifo_t *ptr, void *data)
 
 void lifo_dequeue(lifo_t *ptr, void *data)
 {
+  if (ptr->len == 0) return; // Prevent underflow
   if (data)
   {
     memcpy(data, ptr->data + ((ptr->len - 1) * ptr->data_len), ptr->data_len);

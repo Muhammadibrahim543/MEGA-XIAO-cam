@@ -273,11 +273,22 @@ static void qrDoScan() {
     
     Serial.printf("[QR] Scan: %dx%d frame\n", grayW, grayH);
 
-    uint8_t* grayBuf = (uint8_t*)heap_caps_malloc(grayW * grayH, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!grayBuf) { 
+    int curW = 0, curH = 0;
+    quirc_begin(qrDecoder, &curW, &curH);
+    if (curW != grayW || curH != grayH) {
+        Serial.printf("[QR] quirc_resize(%d,%d)...\n", grayW, grayH);
+        if (quirc_resize(qrDecoder, grayW, grayH) != 0) {
+            xSemaphoreGive(frameMutex);
+            Serial.println("[QR] ERROR: quirc_resize failed");
+            return;
+        }
+    }
+
+    uint8_t* dst = quirc_begin(qrDecoder, nullptr, nullptr);
+    if (!dst) {
         xSemaphoreGive(frameMutex);
-        Serial.println("[QR] ERROR: grayBuf alloc failed");
-        return; 
+        Serial.println("[QR] ERROR: quirc_begin returned NULL");
+        return;
     }
 
     // RGB565 → grayscale
@@ -287,25 +298,25 @@ static void qrDoScan() {
         uint8_t r = ((px >> 11) & 0x1F) << 3;
         uint8_t g = ((px >>  5) & 0x3F) << 2;
         uint8_t b = ( px        & 0x1F) << 3;
-        grayBuf[p] = (uint8_t)(((uint16_t)r * 77 + (uint16_t)g * 150 + (uint16_t)b * 29) >> 8);
+        dst[p] = (uint8_t)(((uint16_t)r * 77 + (uint16_t)g * 150 + (uint16_t)b * 29) >> 8);
     }
     frameReady = false;  // Consume the frame
     xSemaphoreGive(frameMutex);
 
-    Serial.printf("[QR] quirc_resize(%d,%d)...\n", grayW, grayH);
-    if (quirc_resize(qrDecoder, grayW, grayH) != 0) {
-        Serial.println("[QR] ERROR: quirc_resize failed");
-        heap_caps_free(grayBuf);
-        return;
-    }
+    // Pause camera to avoid PSRAM bus contention during heavy quirc processing
+    pauseCameraTask();
 
-    uint8_t* dst = quirc_begin(qrDecoder, nullptr, nullptr);
-    memcpy(dst, grayBuf, grayW * grayH);
+    // Debug stack
+    int dummyLocalVar = 0;
+    Serial.printf("[QR] Stack pointer address: %p, Free stack (words): %d\n", 
+                  &dummyLocalVar, uxTaskGetStackHighWaterMark(NULL));
+
     quirc_end(qrDecoder);
     Serial.println("[QR] quirc_end() done");
 
     int count = quirc_count(qrDecoder);
-    Serial.printf("[QR] quirc_count = %d\n", count);
+    Serial.printf("[QR] quirc_count = %d, Free stack after end: %d\n", 
+                  count, uxTaskGetStackHighWaterMark(NULL));
 
     if (count > 0) {
         struct quirc_code* code = (struct quirc_code*)heap_caps_malloc(sizeof(struct quirc_code), MALLOC_CAP_SPIRAM);
@@ -335,7 +346,11 @@ static void qrDoScan() {
         if (data) heap_caps_free(data);
     }
 
-    heap_caps_free(grayBuf);
+    // Resume camera after scan
+    resumeCameraTask();
+
+    // Brief yield to let system tasks breathe
+    vTaskDelay(pdMS_TO_TICKS(1));
 }
 
 // ─── Camera task — Core 1 ─────────────────────────────────────────
@@ -651,8 +666,8 @@ static void openAudioScreen() {
     uiState.screen = SCR_AUDIO;
     delay(40);
 
-    // 2. Suspend camera task
-    if (camTaskHandle) vTaskSuspend(camTaskHandle);
+    // 2. Suspend camera task safely
+    pauseCameraTask();
 
     // 3. Tear down camera hardware
     recorder_mic_deinit();
@@ -693,13 +708,8 @@ static void closeAudioScreen() {
     camera_init_rgb565(camCfg);
     clearFrameState();
 
-    // Reset pause flags before resuming
-    camPauseRequest = false;
-    camPausedAck    = false;
-
-    // Resume camera task — SCR_MAIN_MENU set after, so task will
-    // see SCR_AUDIO still for one cycle then transition safely.
-    if (camTaskHandle) vTaskResume(camTaskHandle);
+    // Resume camera task safely
+    resumeCameraTask();
 
     switchScreen(SCR_MAIN_MENU);
 }
@@ -714,11 +724,11 @@ static void openLiveRadioScreen() {
     uiState.screen = SCR_LIVE_RADIO;
     delay(40);
 
-    if (camTaskHandle) vTaskSuspend(camTaskHandle);
+    pauseCameraTask();
 
     // Live radio owns ESP-NOW while active, so tear down the video streamer.
-    espnow_stream_stop();
-    espnow_stream_deinit();
+    espnow_stream_stop(false);
+    espnow_stream_deinit(false);
     uiState.streamActive    = false;
     uiState.streamConnected = false;
 
@@ -751,9 +761,7 @@ static void closeLiveRadioScreen() {
     camera_init_rgb565(camCfg);
     clearFrameState();
 
-    camPauseRequest = false;
-    camPausedAck    = false;
-    if (camTaskHandle) vTaskResume(camTaskHandle);
+    resumeCameraTask();
 
     switchScreen(SCR_MAIN_MENU);
     liveRadioCleanupPending = true;
@@ -766,10 +774,10 @@ static void openUsbWebcamScreen() {
     uiState.screen = SCR_USB_WEBCAM;
     delay(40);
     
-    if (camTaskHandle) vTaskSuspend(camTaskHandle);
+    pauseCameraTask();
     
-    espnow_stream_stop();
-    espnow_stream_deinit();
+    espnow_stream_stop(false);
+    espnow_stream_deinit(false);
     uiState.streamActive    = false;
     uiState.streamConnected = false;
 
@@ -783,13 +791,13 @@ static void openUsbWebcamScreen() {
     if (!camera_init(wcCfg)) {
         camera_init_rgb565(camCfg);
         clearFrameState();
-        if (camTaskHandle) vTaskResume(camTaskHandle);
+        resumeCameraTask();
         switchScreen(SCR_MAIN_MENU);
         return;
     }
     
     clearFrameState();
-    if (camTaskHandle) vTaskResume(camTaskHandle);
+    resumeCameraTask();
     uiState.dirtyMenu = true;
     uiState.dirtyFeed = true;
 }
@@ -798,7 +806,7 @@ static void closeUsbWebcamScreen() {
     usbWebcamStreaming = false;
     delay(50);
     
-    if (camTaskHandle) vTaskSuspend(camTaskHandle);
+    pauseCameraTask();
     
     if (usbWebcamAudioStreaming) {
         usbWebcamAudioStreaming = false;
@@ -810,7 +818,7 @@ static void closeUsbWebcamScreen() {
     camera_init_rgb565(camCfg);
     clearFrameState();
 
-    if (camTaskHandle) vTaskResume(camTaskHandle);
+    resumeCameraTask();
 
     switchScreen(SCR_MAIN_MENU);
 }

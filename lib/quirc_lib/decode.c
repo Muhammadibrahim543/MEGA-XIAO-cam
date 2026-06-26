@@ -18,6 +18,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <esp_heap_caps.h>
 
 #define MAX_POLY 64
 
@@ -933,11 +934,15 @@ quirc_decode_error_t quirc_decode(const struct quirc_code *code,
                                   struct quirc_data *data)
 {
   quirc_decode_error_t err;
-  struct datastream *ds = ps_malloc(sizeof(struct datastream));
+  struct datastream *ds = (struct datastream *)heap_caps_malloc(sizeof(struct datastream), MALLOC_CAP_SPIRAM);
+
+  if (!ds) {
+    return QUIRC_ERROR_DATA_OVERFLOW;
+  }
 
   if ((code->size - 17) % 4)
   {
-    free(ds);
+    heap_caps_free(ds);
     return QUIRC_ERROR_INVALID_GRID_SIZE;
   }
 
@@ -949,7 +954,7 @@ quirc_decode_error_t quirc_decode(const struct quirc_code *code,
   if (data->version < 1 ||
       data->version > QUIRC_MAX_VERSION)
   {
-    free(ds);
+    heap_caps_free(ds);
     return QUIRC_ERROR_INVALID_VERSION;
   }
 
@@ -959,7 +964,7 @@ quirc_decode_error_t quirc_decode(const struct quirc_code *code,
     err = read_format(code, data, 1);
   if (err)
   {
-    free(ds);
+    heap_caps_free(ds);
     return err;
   }
 
@@ -967,17 +972,17 @@ quirc_decode_error_t quirc_decode(const struct quirc_code *code,
   err = codestream_ecc(data, ds);
   if (err)
   {
-    free(ds);
+    heap_caps_free(ds);
     return err;
   }
 
   err = decode_payload(data, ds);
   if (err)
   {
-    free(ds);
+    heap_caps_free(ds);
     return err;
   }
 
-  free(ds);
+  heap_caps_free(ds);
   return QUIRC_SUCCESS;
 }

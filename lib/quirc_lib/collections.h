@@ -19,7 +19,7 @@ typedef struct lifo
 __attribute__((aligned(8))) lifo_t;
 
 void lifo_alloc(lifo_t *ptr, size_t size, size_t data_len);
-void lifo_alloc_all(lifo_t *ptr, size_t *size, size_t data_len);
+void lifo_alloc_all(void *buffer, lifo_t *ptr, size_t *size, size_t data_len);
 void lifo_free(lifo_t *ptr);
 void lifo_clear(lifo_t *ptr);
 size_t lifo_size(lifo_t *ptr);
