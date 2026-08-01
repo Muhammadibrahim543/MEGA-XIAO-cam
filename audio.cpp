@@ -175,8 +175,17 @@ void audio_stop(AudioState& as) {
 size_t audio_read_mic(int16_t* buf, size_t maxSamples) {
     if (!s_micReady) return 0;
     
-    // Read whatever is available in the DMA buffer
+    int avail = i2sMic.available();
+    if (avail <= 0) return 0;
+    
+    // Read whatever is available in the DMA buffer without blocking
     size_t bytesWant = maxSamples * sizeof(int16_t);
+    if ((size_t)avail < bytesWant) {
+        bytesWant = avail;
+    }
+    bytesWant &= ~1; // Ensure 16-bit alignment
+    if (bytesWant == 0) return 0;
+    
     size_t got = i2sMic.readBytes((char*)buf, bytesWant);
     
     if (got > 0) {

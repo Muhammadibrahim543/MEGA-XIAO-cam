@@ -433,16 +433,21 @@ static void camTask(void* arg) {
                 }
             }
             
-            // Audio streaming block
+            // Audio streaming block - drain all available audio
             if (usbWebcamAudioStreaming) {
-                int16_t micBuf[1024]; // 2048 bytes
-                size_t bytesRead = audio_read_mic(micBuf, 1024);
-                if (bytesRead > 0) {
+                while (true) {
+                    int16_t micBuf[1024]; // 2048 bytes
+                    size_t bytesRead = audio_read_mic(micBuf, 1024);
+                    if (bytesRead == 0) break;
+                    
                     const uint32_t MAGIC_AUDIO = 0x87654321;
                     uint32_t len = bytesRead;
                     Serial.write((uint8_t*)&MAGIC_AUDIO, 4);
                     Serial.write((uint8_t*)&len, 4);
                     Serial.write((uint8_t*)micBuf, len);
+                    
+                    // If we got less than requested, buffer is empty
+                    if (bytesRead < sizeof(micBuf)) break;
                 }
             }
             if (usbWebcamStreaming && fb->format == PIXFORMAT_JPEG) {

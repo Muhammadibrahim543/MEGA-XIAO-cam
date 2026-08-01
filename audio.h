@@ -37,7 +37,7 @@ extern SdFs SD;
 #define MIC_CHANNELS     1
 #endif
 #define MIC_WAV_HEAD     44
-#define MIC_VOLUME_GAIN  3
+#define MIC_VOLUME_GAIN  1
 #define AUDIO_READ_BYTES 2048
 
 // ─── WAV header (44 bytes) ────────────────────────────────────────
