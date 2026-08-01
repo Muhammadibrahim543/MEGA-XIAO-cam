@@ -433,20 +433,18 @@ static void camTask(void* arg) {
                 }
             }
             
-            // Audio streaming block - drain accumulated audio but break early to prevent video freeze
+            // Audio streaming block - optimized for minimum USB CDC overhead to preserve video framerate
             if (usbWebcamAudioStreaming) {
-                for (int a = 0; a < 10; a++) {
-                    int16_t micBuf[512]; // 1024 bytes
-                    size_t bytesRead = audio_read_mic(micBuf, 512);
+                for (int a = 0; a < 4; a++) {
+                    int16_t micBuf[1024]; // 2048 bytes chunk
+                    size_t bytesRead = audio_read_mic(micBuf, 1024);
                     if (bytesRead == 0) break;
                     
-                    const uint32_t MAGIC_AUDIO = 0x87654321;
-                    uint32_t len = bytesRead;
-                    Serial.write((uint8_t*)&MAGIC_AUDIO, 4);
-                    Serial.write((uint8_t*)&len, 4);
-                    Serial.write((uint8_t*)micBuf, len);
+                    uint32_t header[2] = {0x87654321, (uint32_t)bytesRead};
+                    Serial.write((uint8_t*)header, 8);
+                    Serial.write((uint8_t*)micBuf, bytesRead);
                     
-                    // Break as soon as we caught up to the live stream (prevents infinite micro-loop)
+                    // Break as soon as we caught up to the live stream
                     if (bytesRead < sizeof(micBuf)) break;
                 }
             }
