@@ -577,82 +577,92 @@ class ModernCamUI(ctk.CTk):
         self.after(0, _update)
 
     def update_video(self):
-        with self.frame_lock:
-            frame = self.current_frame
-            
-        if frame is not None and self.cam_switch.get() == 1:
-            frame_height, frame_width, _ = frame.shape
-            
-            lbl_w = self.video_frame.winfo_width()
-            lbl_h = self.video_frame.winfo_height()
-            
-            if lbl_w > 10 and lbl_h > 10:
-                scale_w = lbl_w / frame_width
-                scale_h = lbl_h / frame_height
-                scale = min(scale_w, scale_h)
+        try:
+            if not self.running: return
+            with self.frame_lock:
+                frame = self.current_frame
                 
-                new_w = int(frame_width * scale)
-                new_h = int(frame_height * scale)
+            if frame is not None and self.cam_switch.get() == 1:
+                frame_height, frame_width, _ = frame.shape
                 
-                img = Image.fromarray(frame)
-                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(new_w, new_h))
-                self.video_label.configure(image=ctk_img, text="")
+                lbl_w = self.video_frame.winfo_width()
+                lbl_h = self.video_frame.winfo_height()
+                
+                if lbl_w > 10 and lbl_h > 10:
+                    scale_w = lbl_w / frame_width
+                    scale_h = lbl_h / frame_height
+                    scale = min(scale_w, scale_h)
+                    
+                    new_w = int(frame_width * scale)
+                    new_h = int(frame_height * scale)
+                    
+                    img = Image.fromarray(frame)
+                    self.current_ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(new_w, new_h))
+                    self.video_label.configure(image=self.current_ctk_img, text="")
+        except Exception:
+            pass
         
-        self.after(33, self.update_video)
+        if self.running:
+            self.after(33, self.update_video)
 
     def update_audio_visualizer(self):
-        # 1. Update Volume Meter Canvas
-        w = self.vol_canvas.winfo_width()
-        h = self.vol_canvas.winfo_height()
-        if w > 10 and h > 5:
-            self.vol_canvas.delete("all")
-            db_val = max(-60.0, min(0.0, self.current_db))
-            pct = (db_val + 60.0) / 60.0
-            fill_w = int(pct * w)
-            
-            # Color gradient depending on volume level
-            if db_val < -15.0:
-                color = "#2EB872"  # Vibrant Green
-            elif db_val < -5.0:
-                color = "#F4AF25"  # Warning Yellow
-            else:
-                color = "#E74C3C"  # Peak Red
+        try:
+            if not self.running: return
+            # 1. Update Volume Meter Canvas
+            w = self.vol_canvas.winfo_width()
+            h = self.vol_canvas.winfo_height()
+            if w > 10 and h > 5:
+                self.vol_canvas.delete("all")
+                db_val = max(-60.0, min(0.0, self.current_db))
+                pct = (db_val + 60.0) / 60.0
+                fill_w = int(pct * w)
                 
-            self.vol_canvas.create_rectangle(0, 0, fill_w, h, fill=color, outline="")
-            
-            # Draw dB text overlay
-            text_str = f"{db_val:.1f} dB"
-            self.vol_canvas.create_text(w - 40, h // 2, text=text_str, fill="#FFFFFF", font=("Consolas", 9, "bold"))
-
-        # 2. Update Spectrum Visualizer Canvas
-        sw = self.spec_canvas.winfo_width()
-        sh = self.spec_canvas.winfo_height()
-        if sw > 10 and sh > 10:
-            self.spec_canvas.delete("all")
-            n_bands = SPECTRUM_BANDS
-            bar_gap = 3
-            bar_w = max(2, (sw - (n_bands + 1) * bar_gap) // n_bands)
-            
-            for i, val in enumerate(self.fft_bands):
-                bar_h = int(val * (sh - 4))
-                x0 = bar_gap + i * (bar_w + bar_gap)
-                y0 = sh - bar_h
-                x1 = x0 + bar_w
-                y1 = sh
-                
-                # Height color
-                if val < 0.5:
-                    bar_color = "#007ACC"
-                elif val < 0.75:
-                    bar_color = "#3ABF92"
+                # Color gradient depending on volume level
+                if db_val < -15.0:
+                    color = "#2EB872"  # Vibrant Green
+                elif db_val < -5.0:
+                    color = "#F4AF25"  # Warning Yellow
                 else:
-                    bar_color = "#FF9500"
+                    color = "#E74C3C"  # Peak Red
                     
-                if bar_h > 0:
-                    self.spec_canvas.create_rectangle(x0, y0, x1, y1, fill=bar_color, outline="")
+                self.vol_canvas.create_rectangle(0, 0, fill_w, h, fill=color, outline="")
+                
+                # Draw dB text overlay
+                text_str = f"{db_val:.1f} dB"
+                self.vol_canvas.create_text(w - 40, h // 2, text=text_str, fill="#FFFFFF", font=("Consolas", 9, "bold"))
+
+            # 2. Update Spectrum Visualizer Canvas
+            sw = self.spec_canvas.winfo_width()
+            sh = self.spec_canvas.winfo_height()
+            if sw > 10 and sh > 10:
+                self.spec_canvas.delete("all")
+                n_bands = SPECTRUM_BANDS
+                bar_gap = 3
+                bar_w = max(2, (sw - (n_bands + 1) * bar_gap) // n_bands)
+                
+                for i, val in enumerate(self.fft_bands):
+                    bar_h = int(val * (sh - 4))
+                    x0 = bar_gap + i * (bar_w + bar_gap)
+                    y0 = sh - bar_h
+                    x1 = x0 + bar_w
+                    y1 = sh
+                    
+                    # Height color
+                    if val < 0.5:
+                        bar_color = "#007ACC"
+                    elif val < 0.75:
+                        bar_color = "#3ABF92"
+                    else:
+                        bar_color = "#FF9500"
+                        
+                    if bar_h > 0:
+                        self.spec_canvas.create_rectangle(x0, y0, x1, y1, fill=bar_color, outline="")
+        except Exception:
+            pass
 
         # Schedule next visualizer update (40ms = ~25 FPS)
-        self.after(40, self.update_audio_visualizer)
+        if self.running:
+            self.after(40, self.update_audio_visualizer)
 
     def on_closing(self):
         self.running = False
