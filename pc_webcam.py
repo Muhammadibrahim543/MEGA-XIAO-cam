@@ -82,6 +82,30 @@ class AudioJitterBuffer:
                 
             return out
 
+class DCBlocker:
+    """DSP High-Pass DC-Blocker Filter (Cutoff ~15 Hz)"""
+    def __init__(self, alpha=0.995):
+        self.alpha = alpha
+        self.x_prev = 0.0
+        self.y_prev = 0.0
+
+    def filter(self, samples):
+        if len(samples) == 0:
+            return samples
+        y = np.zeros(len(samples), dtype=np.float32)
+        x_prev = self.x_prev
+        y_prev = self.y_prev
+        alpha = self.alpha
+        
+        for i in range(len(samples)):
+            y[i] = samples[i] - x_prev + alpha * y_prev
+            x_prev = samples[i]
+            y_prev = y[i]
+            
+        self.x_prev = x_prev
+        self.y_prev = y_prev
+        return y
+
 class ModernCamUI(ctk.CTk):
     def __init__(self, ser):
         super().__init__()
@@ -103,7 +127,7 @@ class ModernCamUI(ctk.CTk):
         self.audio_gain = 1.0
         self.audio_queue = queue.Queue(maxsize=50)
         self.jitter_buffer = AudioJitterBuffer()
-        self.dc_offset = 0.0
+        self.dc_blocker = DCBlocker()
         self.audio_stream = None
         self.current_db = -60.0
         
@@ -512,11 +536,8 @@ class ModernCamUI(ctk.CTk):
                         # Convert 16-bit PCM to float32 (-1.0 to +1.0)
                         samples = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
                         
-                        # Real-time DC Offset Removal (Centers waveform at 0)
-                        if len(samples) > 0:
-                            mean_val = np.mean(samples)
-                            self.dc_offset = 0.95 * self.dc_offset + 0.05 * mean_val
-                            samples -= self.dc_offset
+                        # High-Pass DC Blocker (Blocks 0 Hz hardware bias, preserves speech without clipping)
+                        samples = self.dc_blocker.filter(samples)
 
                         if self.audio_gain != 1.0:
                             samples *= self.audio_gain
