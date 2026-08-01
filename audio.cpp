@@ -26,22 +26,16 @@ static bool     s_micReady = false;
 bool audio_mic_init() {
     if (s_micReady) return true;
 
-    Serial.println("[AUDIO] Initializing PDM microphone (ESP_I2S)...");
-
     // XIAO ESP32-S3 Sense PDM pins: CLK=42, DATA=41
-    // setPinsPdmRx(clk, data) — CLK is first argument
     i2sMic.setPinsPdmRx(MIC_CLK_PIN, MIC_DATA_PIN);
 
-    // bufferSize=4096: large DMA buffer prevents underrun during SD writes
     if (!i2sMic.begin(I2S_MODE_PDM_RX, MIC_SAMPLE_RATE,
                       I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO,
                       4096)) {
-        Serial.println("[AUDIO] PDM mic initialization failed!");
         return false;
     }
 
     s_micReady = true;
-    Serial.printf("[AUDIO] PDM mic ready — %d Hz Mono 16-bit (buf=4096)\n", MIC_SAMPLE_RATE);
     return true;
 }
 
@@ -50,7 +44,6 @@ void audio_mic_deinit() {
     if (!s_micReady) return;
     i2sMic.end();
     s_micReady = false;
-    Serial.println("[AUDIO] PDM mic deinitialized");
 }
 
 // ─── Next file name on SD ─────────────────────────────────────────

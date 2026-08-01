@@ -433,9 +433,9 @@ static void camTask(void* arg) {
                 }
             }
             
-            // Audio streaming block - drain all available audio in 512-sample chunks
+            // Audio streaming block - max 2 iterations per camera loop to NEVER starve video
             if (usbWebcamAudioStreaming) {
-                while (true) {
+                for (int a = 0; a < 2; a++) {
                     int16_t micBuf[512]; // 1024 bytes
                     size_t bytesRead = audio_read_mic(micBuf, 512);
                     if (bytesRead == 0) break;
@@ -446,7 +446,6 @@ static void camTask(void* arg) {
                     Serial.write((uint8_t*)&len, 4);
                     Serial.write((uint8_t*)micBuf, len);
                     
-                    // If we got less than requested, buffer is empty
                     if (bytesRead < sizeof(micBuf)) break;
                 }
             }
