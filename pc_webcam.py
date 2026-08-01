@@ -68,16 +68,20 @@ class AudioJitterBuffer:
 
     def read(self, n_samples):
         with self.lock:
-            if self.prebuffering or self.count < n_samples:
+            if self.prebuffering:
                 return np.zeros(n_samples, dtype=np.float32)
             
             out = np.zeros(n_samples, dtype=np.float32)
-            for i in range(n_samples):
+            available = min(n_samples, self.count)
+            for i in range(available):
                 out[i] = self.buf[self.read_idx]
                 self.read_idx = (self.read_idx + 1) % len(self.buf)
-            self.count -= n_samples
+            self.count -= available
             
-            if self.count == 0:
+            if available < n_samples:
+                if available > 0:
+                    fade = np.linspace(1.0, 0.0, available, dtype=np.float32)
+                    out[:available] *= fade
                 self.prebuffering = True
                 
             return out
