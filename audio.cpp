@@ -31,7 +31,7 @@ bool audio_mic_init() {
 
     if (!i2sMic.begin(I2S_MODE_PDM_RX, MIC_SAMPLE_RATE,
                       I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO,
-                      4096)) {
+                      16384)) {
         return false;
     }
 

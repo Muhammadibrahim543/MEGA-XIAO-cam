@@ -433,9 +433,9 @@ static void camTask(void* arg) {
                 }
             }
             
-            // Audio streaming block - max 2 chunks per camera frame so video NEVER freezes
+            // Audio streaming block - drain accumulated audio but break early to prevent video freeze
             if (usbWebcamAudioStreaming) {
-                for (int a = 0; a < 2; a++) {
+                for (int a = 0; a < 10; a++) {
                     int16_t micBuf[512]; // 1024 bytes
                     size_t bytesRead = audio_read_mic(micBuf, 512);
                     if (bytesRead == 0) break;
@@ -446,6 +446,7 @@ static void camTask(void* arg) {
                     Serial.write((uint8_t*)&len, 4);
                     Serial.write((uint8_t*)micBuf, len);
                     
+                    // Break as soon as we caught up to the live stream (prevents infinite micro-loop)
                     if (bytesRead < sizeof(micBuf)) break;
                 }
             }
