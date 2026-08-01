@@ -103,6 +103,7 @@ class ModernCamUI(ctk.CTk):
         self.audio_gain = 1.0
         self.audio_queue = queue.Queue(maxsize=50)
         self.jitter_buffer = AudioJitterBuffer()
+        self.dc_offset = 0.0
         self.audio_stream = None
         self.current_db = -60.0
         
@@ -510,6 +511,13 @@ class ModernCamUI(ctk.CTk):
                         
                         # Convert 16-bit PCM to float32 (-1.0 to +1.0)
                         samples = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
+                        
+                        # Real-time DC Offset Removal (Centers waveform at 0)
+                        if len(samples) > 0:
+                            mean_val = np.mean(samples)
+                            self.dc_offset = 0.95 * self.dc_offset + 0.05 * mean_val
+                            samples -= self.dc_offset
+
                         if self.audio_gain != 1.0:
                             samples *= self.audio_gain
                             np.clip(samples, -1.0, 1.0, out=samples)
