@@ -5,8 +5,10 @@ import numpy as np
 import time
 import struct
 import threading
+import queue
 import customtkinter as ctk
 from PIL import Image
+import sounddevice as sd
 
 try:
     import pyvirtualcam
@@ -15,43 +17,75 @@ except ImportError:
     HAS_PYVIRTUALCAM = False
 
 # Initialize CustomTkinter aesthetics
-ctk.set_appearance_mode("Dark")  # Modes: "System" (standard), "Dark", "Light"
-ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark-blue"
+ctk.set_appearance_mode("Dark")
+ctk.set_default_color_theme("blue")
 
-MAGIC_VID = b'\x78\x56\x34\x12'  # 0x12345678 in little-endian
+MAGIC_VID = b'\x78\x56\x34\x12'  # 0x12345678 (Video JPEG Frame)
+MAGIC_AUD = b'\x21\x43\x65\x87'  # 0x87654321 (Audio PCM Chunk)
+
+SAMPLE_RATE = 16000
+CHANNELS = 1
+FFT_SIZE = 512
+SPECTRUM_BANDS = 32
 
 class ModernCamUI(ctk.CTk):
     def __init__(self, ser):
         super().__init__()
 
         self.ser = ser
-        self.title("XIAO ESP32-S3 Vision Hub")
-        self.geometry("1100x700")
-        self.minsize(800, 500)
+        self.title("XIAO ESP32-S3 Vision & Audio Hub")
+        self.geometry("1180x800")
+        self.minsize(900, 600)
         
-        # Threading & Virtual Cam
+        # Threading & Virtual Cam / Mic State
         self.current_frame = None
         self.frame_lock = threading.Lock()
         self.running = True
+        
         self.vcam = None
         self.vcam_enabled = False
+        
+        self.mic_enabled = False
+        self.audio_gain = 1.0
+        self.audio_queue = queue.Queue(maxsize=50)
+        self.audio_stream = None
+        self.current_db = -60.0
+        
+        self.audio_buffer = np.zeros(FFT_SIZE, dtype=np.float32)
+        self.fft_bands = np.zeros(SPECTRUM_BANDS, dtype=np.float32)
+        
+        # Create logarithmic bin edges for FFT spectrum
+        min_bin = 1
+        max_bin = FFT_SIZE // 2
+        self.bin_edges = np.logspace(np.log10(min_bin), np.log10(max_bin), SPECTRUM_BANDS + 1).astype(int)
 
-        # Configure Grid Layout
+        # Configure Grid Layout (Left Controls Sidebar, Right Media Panel)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        # ================= LEFT PANEL (Controls) =================
-        self.sidebar = ctk.CTkFrame(self, width=280, corner_radius=0)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_rowconfigure(11, weight=1)  # Push bottom elements down
+        # ================= LEFT PANEL (Controls Sidebar) =================
+        self.sidebar_scroll = ctk.CTkScrollableFrame(self, width=320, corner_radius=0)
+        self.sidebar_scroll.grid(row=0, column=0, sticky="nsew")
 
         # Logo / Title
-        self.logo_label = ctk.CTkLabel(self.sidebar, text="Camera Controls", font=ctk.CTkFont(size=20, weight="bold"))
-        self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 20))
+        self.logo_label = ctk.CTkLabel(self.sidebar_scroll, text="⚡ XIAO Vision & Audio Hub", font=ctk.CTkFont(size=18, weight="bold"))
+        self.logo_label.pack(padx=15, pady=(15, 10), anchor="w")
+
+        # ---------------- VIDEO CONTROLS CARD ----------------
+        self.cam_card = ctk.CTkFrame(self.sidebar_scroll, corner_radius=10)
+        self.cam_card.pack(padx=10, pady=8, fill="x")
+
+        self.cam_card_title = ctk.CTkLabel(self.cam_card, text="📹 Camera Settings", font=ctk.CTkFont(size=14, weight="bold"))
+        self.cam_card_title.pack(padx=15, pady=(10, 5), anchor="w")
+
+        # Video Switch (Enable/Disable Camera Stream)
+        self.cam_switch = ctk.CTkSwitch(self.cam_card, text="Camera Feed (ON)", command=self.toggle_cam_stream)
+        self.cam_switch.select()
+        self.cam_switch.pack(padx=15, pady=5, anchor="w")
 
         # Resolution Dropdown
-        self.res_label = ctk.CTkLabel(self.sidebar, text="Resolution:")
-        self.res_label.grid(row=1, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.res_label = ctk.CTkLabel(self.cam_card, text="Resolution:")
+        self.res_label.pack(padx=15, pady=(5, 0), anchor="w")
         
         self.resolutions = {
             "QVGA (320x240)": 5,
@@ -61,34 +95,34 @@ class ModernCamUI(ctk.CTk):
             "HD (1280x720)": 11,
             "SXGA (1280x1024)": 12
         }
-        self.res_combo = ctk.CTkComboBox(self.sidebar, values=list(self.resolutions.keys()), command=self.on_res_change)
+        self.res_combo = ctk.CTkComboBox(self.cam_card, values=list(self.resolutions.keys()), command=self.on_res_change)
         self.res_combo.set("SVGA (800x600)")
-        self.res_combo.grid(row=2, column=0, padx=20, pady=(0, 15), sticky="ew")
+        self.res_combo.pack(padx=15, pady=(2, 10), fill="x")
 
         # Quality Slider
-        self.q_label = ctk.CTkLabel(self.sidebar, text="Quality (Lower = Better): 10")
-        self.q_label.grid(row=3, column=0, padx=20, pady=(10, 0), sticky="w")
-        self.q_slider = ctk.CTkSlider(self.sidebar, from_=10, to=40, command=self.on_q_change)
+        self.q_label = ctk.CTkLabel(self.cam_card, text="Quality (Lower = Better): 10")
+        self.q_label.pack(padx=15, pady=(5, 0), anchor="w")
+        self.q_slider = ctk.CTkSlider(self.cam_card, from_=10, to=40, command=self.on_q_change)
         self.q_slider.set(10)
-        self.q_slider.grid(row=4, column=0, padx=20, pady=(0, 15), sticky="ew")
-
-        # Image Settings (Brightness, Contrast, Saturation)
-        self.img_label = ctk.CTkLabel(self.sidebar, text="Image Adjustments", font=ctk.CTkFont(weight="bold"))
-        self.img_label.grid(row=5, column=0, padx=20, pady=(15, 5), sticky="w")
+        self.q_slider.pack(padx=15, pady=(2, 10), fill="x")
 
         # Brightness
-        self.bright_slider = ctk.CTkSlider(self.sidebar, from_=-2, to=2, number_of_steps=4, command=lambda v: self.send_cmd('B', int(v)))
+        self.bright_label = ctk.CTkLabel(self.cam_card, text="Brightness")
+        self.bright_label.pack(padx=15, pady=(2, 0), anchor="w")
+        self.bright_slider = ctk.CTkSlider(self.cam_card, from_=-2, to=2, number_of_steps=4, command=lambda v: self.send_cmd('B', int(v)))
         self.bright_slider.set(0)
-        self.bright_slider.grid(row=6, column=0, padx=20, pady=5, sticky="ew")
-        
+        self.bright_slider.pack(padx=15, pady=(2, 8), fill="x")
+
         # Contrast
-        self.contrast_slider = ctk.CTkSlider(self.sidebar, from_=-2, to=2, number_of_steps=4, command=lambda v: self.send_cmd('C', int(v)))
+        self.contrast_label = ctk.CTkLabel(self.cam_card, text="Contrast")
+        self.contrast_label.pack(padx=15, pady=(2, 0), anchor="w")
+        self.contrast_slider = ctk.CTkSlider(self.cam_card, from_=-2, to=2, number_of_steps=4, command=lambda v: self.send_cmd('C', int(v)))
         self.contrast_slider.set(0)
-        self.contrast_slider.grid(row=7, column=0, padx=20, pady=5, sticky="ew")
+        self.contrast_slider.pack(padx=15, pady=(2, 8), fill="x")
 
         # Switches Frame (H-Mirror & V-Flip)
-        self.switches_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        self.switches_frame.grid(row=8, column=0, padx=20, pady=10, sticky="ew")
+        self.switches_frame = ctk.CTkFrame(self.cam_card, fg_color="transparent")
+        self.switches_frame.pack(padx=15, pady=5, fill="x")
         self.switches_frame.grid_columnconfigure((0, 1), weight=1)
 
         self.hm_switch = ctk.CTkSwitch(self.switches_frame, text="H-Mirror", command=lambda: self.send_cmd('HM', self.hm_switch.get()))
@@ -97,39 +131,116 @@ class ModernCamUI(ctk.CTk):
         self.vf_switch = ctk.CTkSwitch(self.switches_frame, text="V-Flip", command=lambda: self.send_cmd('VF', self.vf_switch.get()))
         self.vf_switch.grid(row=0, column=1, sticky="w")
 
-        # Virtual Cam Switch (for Google Meet / Zoom / Discord)
-        self.vcam_switch = ctk.CTkSwitch(self.sidebar, text="Virtual Cam (Meet/Zoom)", command=self.toggle_vcam)
-        self.vcam_switch.grid(row=9, column=0, padx=20, pady=(5, 10), sticky="w")
+        # Virtual Cam Switch
+        self.vcam_switch = ctk.CTkSwitch(self.cam_card, text="Virtual Cam (Meet/Zoom)", command=self.toggle_vcam)
+        self.vcam_switch.pack(padx=15, pady=(8, 12), anchor="w")
 
-        # Info Box at the bottom
-        self.info_box = ctk.CTkTextbox(self.sidebar, height=100, corner_radius=10)
-        self.info_box.grid(row=10, column=0, padx=20, pady=20, sticky="ew")
+
+        # ---------------- MICROPHONE CONTROLS CARD ----------------
+        self.mic_card = ctk.CTkFrame(self.sidebar_scroll, corner_radius=10)
+        self.mic_card.pack(padx=10, pady=8, fill="x")
+
+        self.mic_card_title = ctk.CTkLabel(self.mic_card, text="🎙️ Microphone & Audio", font=ctk.CTkFont(size=14, weight="bold"))
+        self.mic_card_title.pack(padx=15, pady=(10, 5), anchor="w")
+
+        # Microphone Stream Switch
+        self.mic_switch = ctk.CTkSwitch(self.mic_card, text="Microphone Stream", command=self.toggle_mic_stream)
+        self.mic_switch.pack(padx=15, pady=5, anchor="w")
+
+        # Audio Output Device Dropdown
+        self.aud_dev_label = ctk.CTkLabel(self.mic_card, text="Output Audio Device:")
+        self.aud_dev_label.pack(padx=15, pady=(5, 0), anchor="w")
+        
+        self.audio_devices = self.get_output_audio_devices()
+        dev_names = list(self.audio_devices.keys()) if self.audio_devices else ["No Output Device"]
+        
+        self.aud_dev_combo = ctk.CTkComboBox(self.mic_card, values=dev_names, command=self.on_audio_device_change)
+        
+        # Auto-select VB-Audio Cable if found
+        default_dev = dev_names[0]
+        for name in dev_names:
+            if "CABLE" in name.upper():
+                default_dev = name
+                break
+        self.aud_dev_combo.set(default_dev)
+        self.aud_dev_combo.pack(padx=15, pady=(2, 10), fill="x")
+
+        # Audio Gain Slider
+        self.gain_label = ctk.CTkLabel(self.mic_card, text="Audio Gain: 1.0x")
+        self.gain_label.pack(padx=15, pady=(2, 0), anchor="w")
+        self.gain_slider = ctk.CTkSlider(self.mic_card, from_=0.5, to=5.0, number_of_steps=45, command=self.on_gain_change)
+        self.gain_slider.set(1.0)
+        self.gain_slider.pack(padx=15, pady=(2, 12), fill="x")
+
+
+        # ---------------- SYSTEM INFO BOX ----------------
+        self.info_box = ctk.CTkTextbox(self.sidebar_scroll, height=110, corner_radius=10)
+        self.info_box.pack(padx=10, pady=(8, 15), fill="x")
         self.info_box.insert("0.0", "System Ready.\nWaiting for ESP32-S3 Stream...")
         self.info_box.configure(state="disabled")
 
-        # ================= RIGHT PANEL (Video Feed) =================
-        self.video_frame = ctk.CTkFrame(self, corner_radius=15, fg_color="#1E1E1E")
-        self.video_frame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+        # ================= RIGHT PANEL (Video Feed & Audio Dashboard) =================
+        self.right_panel = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        self.right_panel.grid(row=0, column=1, padx=15, pady=15, sticky="nsew")
+        self.right_panel.grid_rowconfigure(0, weight=4)  # Video gets more height
+        self.right_panel.grid_rowconfigure(1, weight=1)  # Audio visualizer panel
+        self.right_panel.grid_columnconfigure(0, weight=1)
+
+        # Top Video Frame
+        self.video_frame = ctk.CTkFrame(self.right_panel, corner_radius=12, fg_color="#1E1E1E")
+        self.video_frame.grid(row=0, column=0, padx=0, pady=(0, 10), sticky="nsew")
         self.video_frame.grid_rowconfigure(0, weight=1)
         self.video_frame.grid_columnconfigure(0, weight=1)
 
-        self.video_label = ctk.CTkLabel(self.video_frame, text="NO SIGNAL", font=ctk.CTkFont(size=30, weight="bold"), text_color="gray")
+        self.video_label = ctk.CTkLabel(self.video_frame, text="NO SIGNAL", font=ctk.CTkFont(size=28, weight="bold"), text_color="gray")
         self.video_label.grid(row=0, column=0, sticky="nsew")
 
-        # ================= START THREADS =================
+        # Bottom Audio Visualizer Panel
+        self.audio_panel = ctk.CTkFrame(self.right_panel, corner_radius=12, fg_color="#1E1E1E")
+        self.audio_panel.grid(row=1, column=0, padx=0, pady=0, sticky="nsew")
+        self.audio_panel.grid_columnconfigure(0, weight=1)
+
+        self.aud_panel_title = ctk.CTkLabel(self.audio_panel, text="🎙️ Live Microphone Spectrum & Volume Level", font=ctk.CTkFont(size=13, weight="bold"))
+        self.aud_panel_title.pack(padx=15, pady=(8, 2), anchor="w")
+
+        # Volume Meter Bar (Canvas)
+        self.vol_canvas = ctk.CTkCanvas(self.audio_panel, height=18, bg="#252526", highlightthickness=0)
+        self.vol_canvas.pack(padx=15, pady=(2, 4), fill="x")
+
+        # Spectrum Visualizer (Canvas)
+        self.spec_canvas = ctk.CTkCanvas(self.audio_panel, height=75, bg="#252526", highlightthickness=0)
+        self.spec_canvas.pack(padx=15, pady=(2, 8), fill="x")
+
+
+        # ================= START THREADS & TIMERS =================
         self.stream_thread = threading.Thread(target=self.receive_stream, daemon=True)
         self.stream_thread.start()
         
-        # Request ESP32 to start streaming camera feed
+        # Start initial camera command
         self.send_cmd('CAM', 1)
 
+        # UI Update loops
         self.update_video()
+        self.update_audio_visualizer()
+
+    def get_output_audio_devices(self):
+        """Query all available output audio devices on the system"""
+        devs = {}
+        try:
+            all_devs = sd.query_devices()
+            for i, d in enumerate(all_devs):
+                if d["max_output_channels"] > 0:
+                    name = f"[{i}] {d['name']}"
+                    devs[name] = i
+        except Exception as e:
+            print(f"[AUDIO DEV QUERY ERROR]: {e}")
+        return devs
 
     def send_cmd(self, prefix, val):
         try:
             self.ser.write(f"SET:{prefix}:{val}\n".encode())
-        except:
-            pass
+        except Exception as e:
+            print(f"[SERIAL SEND ERROR]: {e}")
 
     def on_res_change(self, choice):
         val = self.resolutions[choice]
@@ -139,6 +250,80 @@ class ModernCamUI(ctk.CTk):
         val = int(val)
         self.q_label.configure(text=f"Quality (Lower = Better): {val}")
         self.send_cmd('Q', val)
+
+    def on_gain_change(self, val):
+        self.audio_gain = float(val)
+        self.gain_label.configure(text=f"Audio Gain: {self.audio_gain:.1f}x")
+
+    def toggle_cam_stream(self):
+        enabled = self.cam_switch.get()
+        self.send_cmd('CAM', 1 if enabled else 0)
+        if enabled:
+            self.update_info("Camera Stream Enabled")
+        else:
+            self.update_info("Camera Stream Muted")
+            self.video_label.configure(image=None, text="CAMERA OFF")
+
+    def toggle_mic_stream(self):
+        enabled = self.mic_switch.get()
+        self.send_cmd('MIC', 1 if enabled else 0)
+        if enabled:
+            self.start_audio_output()
+            self.update_info("Microphone Stream Enabled 🟢")
+        else:
+            self.stop_audio_output()
+            self.update_info("Microphone Muted 🔴")
+
+    def on_audio_device_change(self, choice):
+        if choice in self.audio_devices:
+            dev_idx = self.audio_devices[choice]
+            if self.mic_enabled:
+                self.start_audio_output(dev_idx)
+
+    def start_audio_output(self, dev_idx=None):
+        self.stop_audio_output()
+        if dev_idx is None:
+            choice = self.aud_dev_combo.get()
+            dev_idx = self.audio_devices.get(choice, None)
+
+        def audio_callback(outdata, frames, time_info, status):
+            needed = frames
+            out = np.zeros(needed, dtype=np.float32)
+            pos = 0
+            while pos < needed:
+                try:
+                    chunk = self.audio_queue.get_nowait()
+                except queue.Empty:
+                    break
+                take = min(len(chunk), needed - pos)
+                out[pos:pos+take] = chunk[:take]
+                pos += take
+            outdata[:, 0] = out
+
+        try:
+            self.audio_stream = sd.OutputStream(
+                device=dev_idx,
+                samplerate=SAMPLE_RATE,
+                channels=CHANNELS,
+                dtype="float32",
+                latency=0.08,
+                callback=audio_callback
+            )
+            self.audio_stream.start()
+            self.mic_enabled = True
+        except Exception as e:
+            print(f"[AUDIO OUTPUT ERROR]: {e}")
+            self.update_info(f"Audio Output Error:\n{e}")
+
+    def stop_audio_output(self):
+        self.mic_enabled = False
+        if self.audio_stream:
+            try:
+                self.audio_stream.stop()
+                self.audio_stream.close()
+            except:
+                pass
+            self.audio_stream = None
 
     def toggle_vcam(self):
         if not HAS_PYVIRTUALCAM:
@@ -163,6 +348,8 @@ class ModernCamUI(ctk.CTk):
         buffer = bytearray()
         fps_time = time.time()
         frame_count = 0
+        bytes_count = 0
+        audio_bytes_count = 0
 
         while self.running:
             try:
@@ -171,83 +358,143 @@ class ModernCamUI(ctk.CTk):
                     continue
                     
                 buffer.extend(chunk)
+                bytes_count += len(chunk)
                 
                 while True:
-                    # Search for MAGIC_VID header (0x12345678)
-                    vid_idx = buffer.find(MAGIC_VID)
-                    
-                    if vid_idx == -1:
-                        # Keep last 3 bytes in case magic is split across chunks
-                        if len(buffer) > 4:
-                            buffer = buffer[-3:]
+                    if len(buffer) < 8:
                         break
                     
-                    # Discard any noise/data before magic header
-                    if vid_idx > 0:
-                        buffer = buffer[vid_idx:]
-                        
-                    if len(buffer) < 8:
-                        break  # Wait for 4-byte magic + 4-byte size header
-                        
-                    size_bytes = buffer[4:8]
-                    frame_size = struct.unpack('<I', size_bytes)[0]
+                    vid_idx = buffer.find(MAGIC_VID)
+                    aud_idx = buffer.find(MAGIC_AUD)
                     
-                    # Sanity check frame size (max 2MB)
-                    if frame_size <= 0 or frame_size > 2 * 1024 * 1024:
-                        buffer = buffer[4:]  # Corrupted header, skip magic
-                        continue
-                        
-                    if len(buffer) < 8 + frame_size:
-                        break  # Wait for complete JPEG frame data
-                        
-                    # Extract complete JPEG frame
-                    frame_data = buffer[8 : 8 + frame_size]
-                    buffer = buffer[8 + frame_size :]
+                    if vid_idx == -1 and aud_idx == -1:
+                        buffer = buffer[-3:]
+                        break
                     
-                    img_array = np.frombuffer(frame_data, dtype=np.uint8)
-                    frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-                    
-                    if frame is not None:
-                        # Convert BGR to RGB for PIL & VirtualCam
-                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    # Determine which packet header is first
+                    if vid_idx != -1 and (aud_idx == -1 or vid_idx < aud_idx):
+                        if vid_idx > 0:
+                            buffer = buffer[vid_idx:]
+                        if len(buffer) < 8:
+                            break
                         
-                        with self.frame_lock:
-                            self.current_frame = frame
+                        frame_size = struct.unpack('<I', buffer[4:8])[0]
+                        if frame_size <= 0 or frame_size > 2 * 1024 * 1024:
+                            buffer = buffer[4:] # Skip corrupted magic
+                            continue
+                        if len(buffer) < 8 + frame_size:
+                            break
+                        
+                        frame_data = bytes(buffer[8 : 8 + frame_size])
+                        buffer = buffer[8 + frame_size :]
+                        
+                        img_array = np.frombuffer(frame_data, dtype=np.uint8)
+                        frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                        
+                        if frame is not None:
+                            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                            with self.frame_lock:
+                                self.current_frame = frame
 
-                        # Send frame to Virtual Camera if active
-                        if self.vcam_enabled and HAS_PYVIRTUALCAM:
-                            h, w, _ = frame.shape
-                            if self.vcam is None or self.vcam.width != w or self.vcam.height != h:
-                                if self.vcam:
+                            if self.vcam_enabled and HAS_PYVIRTUALCAM:
+                                h, w, _ = frame.shape
+                                if self.vcam is None or self.vcam.width != w or self.vcam.height != h:
+                                    if self.vcam:
+                                        try: self.vcam.close()
+                                        except: pass
                                     try:
-                                        self.vcam.close()
-                                    except:
-                                        pass
-                                try:
-                                    self.vcam = pyvirtualcam.Camera(width=w, height=h, fps=30, fmt=pyvirtualcam.PixelFormat.RGB)
-                                    self.update_info(f"Virtual Cam Active:\n{self.vcam.device}")
-                                except Exception as e:
-                                    self.vcam_enabled = False
-                                    self.vcam_switch.deselect()
-                                    self.update_info(f"Virtual Cam Error:\n{e}")
-                            if self.vcam:
-                                try:
-                                    self.vcam.send(frame)
-                                except Exception as e:
-                                    pass
+                                        self.vcam = pyvirtualcam.Camera(width=w, height=h, fps=30, fmt=pyvirtualcam.PixelFormat.RGB)
+                                        self.update_info(f"Virtual Cam Active:\n{self.vcam.device}")
+                                    except Exception as e:
+                                        self.vcam_enabled = False
+                                        self.vcam_switch.deselect()
+                                        self.update_info(f"Virtual Cam Error:\n{e}")
+                                if self.vcam:
+                                    try: self.vcam.send(frame)
+                                    except: pass
+                            frame_count += 1
+                    else:
+                        # Audio Packet Processing
+                        if aud_idx > 0:
+                            buffer = buffer[aud_idx:]
+                        if len(buffer) < 8:
+                            break
                         
-                        frame_count += 1
-                        current_time = time.time()
-                        if current_time - fps_time >= 1.0:
-                            fps = frame_count / (current_time - fps_time)
-                            kb_size = frame_size / 1024
-                            vcam_str = f" | VCam: ON" if self.vcam_enabled else ""
-                            info_str = f"FPS: {fps:.1f}\nSize: {kb_size:.1f} KB\nRes: {frame.shape[1]}x{frame.shape[0]}{vcam_str}"
-                            self.update_info(info_str)
-                            fps_time = current_time
-                            frame_count = 0
+                        audio_size = struct.unpack('<I', buffer[4:8])[0]
+                        if audio_size <= 0 or audio_size > 65536 or audio_size % 2 != 0:
+                            buffer = buffer[4:] # Skip corrupted header
+                            continue
+                        if len(buffer) < 8 + audio_size:
+                            break
+                        
+                        pcm_data = bytes(buffer[8 : 8 + audio_size])
+                        buffer = buffer[8 + audio_size :]
+                        audio_bytes_count += audio_size
+                        
+                        # Convert 16-bit PCM to float32 (-1.0 to +1.0)
+                        samples = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
+                        if self.audio_gain != 1.0:
+                            samples *= self.audio_gain
+                            np.clip(samples, -1.0, 1.0, out=samples)
+                        
+                        # Calculate volume in dB & FFT spectrum for GUI
+                        if len(samples) > 0:
+                            rms = np.sqrt(np.mean(samples**2))
+                            db = 20.0 * np.log10(rms) if rms > 0.0001 else -60.0
+                            self.current_db = 0.25 * db + 0.75 * self.current_db
+                            
+                            # Roll audio FFT buffer
+                            n = len(samples)
+                            if n >= FFT_SIZE:
+                                self.audio_buffer[:] = samples[-FFT_SIZE:]
+                            else:
+                                self.audio_buffer = np.roll(self.audio_buffer, -n)
+                                self.audio_buffer[-n:] = samples
+                            
+                            # Calculate FFT frequency bands
+                            windowed = self.audio_buffer * np.hanning(FFT_SIZE)
+                            fft_mag = np.abs(np.fft.rfft(windowed)) / FFT_SIZE
+                            bands = np.zeros(SPECTRUM_BANDS, dtype=np.float32)
+                            for i in range(SPECTRUM_BANDS):
+                                s_bin = self.bin_edges[i]
+                                e_bin = max(s_bin + 1, self.bin_edges[i+1])
+                                bands[i] = np.mean(fft_mag[s_bin:e_bin])
+                            
+                            bands_db = 20 * np.log10(bands + 1e-6)
+                            bands_norm = np.clip((bands_db + 60) / 60.0, 0.0, 1.0)
+                            self.fft_bands = 0.35 * bands_norm + 0.65 * self.fft_bands
+
+                        if self.mic_enabled:
+                            try:
+                                self.audio_queue.put_nowait(samples)
+                            except queue.Full:
+                                try:
+                                    self.audio_queue.get_nowait()
+                                    self.audio_queue.put_nowait(samples)
+                                except: pass
+
+                # Update Stats timer
+                current_time = time.time()
+                if current_time - fps_time >= 1.0:
+                    fps = frame_count / (current_time - fps_time)
+                    kbps = (bytes_count / 1024) / (current_time - fps_time)
+                    aud_kbps = (audio_bytes_count / 1024) / (current_time - fps_time)
+                    
+                    vcam_str = "ON" if self.vcam_enabled else "OFF"
+                    mic_str = "ACTIVE 🟢" if self.mic_enabled else "MUTED 🔴"
+                    
+                    info_str = (
+                        f"Video FPS: {fps:.1f} ({kbps:.1f} KB/s)\n"
+                        f"Audio Stream: {mic_str} ({aud_kbps:.1f} KB/s)\n"
+                        f"Virtual Cam: {vcam_str} | Level: {self.current_db:.1f} dB"
+                    )
+                    self.update_info(info_str)
+                    
+                    fps_time = current_time
+                    frame_count = 0
+                    bytes_count = 0
+                    audio_bytes_count = 0
             except Exception as e:
-                print(f"[STREAM ERROR]: {e}")
                 time.sleep(0.05)
 
     def update_info(self, text):
@@ -262,16 +509,13 @@ class ModernCamUI(ctk.CTk):
         with self.frame_lock:
             frame = self.current_frame
             
-        if frame is not None:
-            # Resize frame to fit the window while maintaining aspect ratio
+        if frame is not None and self.cam_switch.get() == 1:
             frame_height, frame_width, _ = frame.shape
             
-            # Get current label size
             lbl_w = self.video_frame.winfo_width()
             lbl_h = self.video_frame.winfo_height()
             
             if lbl_w > 10 and lbl_h > 10:
-                # Calculate scale
                 scale_w = lbl_w / frame_width
                 scale_h = lbl_h / frame_height
                 scale = min(scale_w, scale_h)
@@ -279,18 +523,71 @@ class ModernCamUI(ctk.CTk):
                 new_w = int(frame_width * scale)
                 new_h = int(frame_height * scale)
                 
-                # Resize using PIL (CTKImage will handle this natively)
                 img = Image.fromarray(frame)
                 ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(new_w, new_h))
-                
                 self.video_label.configure(image=ctk_img, text="")
         
-        # Schedule next update (30fps = ~33ms)
         self.after(33, self.update_video)
-        
+
+    def update_audio_visualizer(self):
+        # 1. Update Volume Meter Canvas
+        w = self.vol_canvas.winfo_width()
+        h = self.vol_canvas.winfo_height()
+        if w > 10 and h > 5:
+            self.vol_canvas.delete("all")
+            db_val = max(-60.0, min(0.0, self.current_db))
+            pct = (db_val + 60.0) / 60.0
+            fill_w = int(pct * w)
+            
+            # Color gradient depending on volume level
+            if db_val < -15.0:
+                color = "#2EB872"  # Vibrant Green
+            elif db_val < -5.0:
+                color = "#F4AF25"  # Warning Yellow
+            else:
+                color = "#E74C3C"  # Peak Red
+                
+            self.vol_canvas.create_rectangle(0, 0, fill_w, h, fill=color, outline="")
+            
+            # Draw dB text overlay
+            text_str = f"{db_val:.1f} dB"
+            self.vol_canvas.create_text(w - 40, h // 2, text=text_str, fill="#FFFFFF", font=("Consolas", 9, "bold"))
+
+        # 2. Update Spectrum Visualizer Canvas
+        sw = self.spec_canvas.winfo_width()
+        sh = self.spec_canvas.winfo_height()
+        if sw > 10 and sh > 10:
+            self.spec_canvas.delete("all")
+            n_bands = SPECTRUM_BANDS
+            bar_gap = 3
+            bar_w = max(2, (sw - (n_bands + 1) * bar_gap) // n_bands)
+            
+            for i, val in enumerate(self.fft_bands):
+                bar_h = int(val * (sh - 4))
+                x0 = bar_gap + i * (bar_w + bar_gap)
+                y0 = sh - bar_h
+                x1 = x0 + bar_w
+                y1 = sh
+                
+                # Height color
+                if val < 0.5:
+                    bar_color = "#007ACC"
+                elif val < 0.75:
+                    bar_color = "#3ABF92"
+                else:
+                    bar_color = "#FF9500"
+                    
+                if bar_h > 0:
+                    self.spec_canvas.create_rectangle(x0, y0, x1, y1, fill=bar_color, outline="")
+
+        # Schedule next visualizer update (40ms = ~25 FPS)
+        self.after(40, self.update_audio_visualizer)
+
     def on_closing(self):
         self.running = False
         self.send_cmd('CAM', 0)
+        self.send_cmd('MIC', 0)
+        self.stop_audio_output()
         if self.vcam:
             try:
                 self.vcam.close()
@@ -304,8 +601,8 @@ class ModernCamUI(ctk.CTk):
         self.destroy()
 
 def main():
-    print("ESP32-S3 Vision Hub - Modern UI")
-    print("-" * 30)
+    print("ESP32-S3 Vision & Audio Hub - Modern UI")
+    print("-" * 40)
     print("Available ports:")
     ports = serial.tools.list_ports.comports()
     
@@ -351,7 +648,7 @@ def main():
         print(f"Failed to open {port}: {e}")
         return
 
-    print("Connected! Launching UI...")
+    print("Connected! Launching Vision & Audio Hub...")
     
     app = ModernCamUI(ser)
     app.protocol("WM_DELETE_WINDOW", app.on_closing)
