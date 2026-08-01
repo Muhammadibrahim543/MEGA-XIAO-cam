@@ -25,8 +25,62 @@ MAGIC_AUD = b'\x21\x43\x65\x87'  # 0x87654321 (Audio PCM Chunk)
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
-FFT_SIZE = 512
-SPECTRUM_BANDS = 32
+
+# TUI Spectrum settings
+FFT_SIZE = 1024
+SPECTRUM_BANDS = 48
+
+def create_log_bins(n_bins, n_fft, sample_rate):
+    min_freq = 60
+    max_freq = 8000
+    min_bin = max(1, int(min_freq / (sample_rate / n_fft)))
+    max_bin = min(n_fft // 2, int(max_freq / (sample_rate / n_fft)))
+    edges = np.logspace(np.log10(min_bin), np.log10(max_bin), n_bins + 1)
+    return edges.astype(int)
+
+class AudioJitterBuffer:
+    def __init__(self, target_delay_samples=2400, max_samples=64000):
+        self.lock = threading.Lock()
+        self.buf = np.zeros(max_samples, dtype=np.float32)
+        self.write_idx = 0
+        self.read_idx = 0
+        self.count = 0
+        self.target_delay = target_delay_samples
+        self.prebuffering = True
+
+    def write(self, samples):
+        with self.lock:
+            n = len(samples)
+            if n == 0: return
+            space = len(self.buf) - self.count
+            if n > space:
+                skip = n - space
+                self.read_idx = (self.read_idx + skip) % len(self.buf)
+                self.count -= skip
+
+            for i in range(n):
+                self.buf[self.write_idx] = samples[i]
+                self.write_idx = (self.write_idx + 1) % len(self.buf)
+            self.count += n
+            
+            if self.prebuffering and self.count >= self.target_delay:
+                self.prebuffering = False
+
+    def read(self, n_samples):
+        with self.lock:
+            if self.prebuffering or self.count < n_samples:
+                return np.zeros(n_samples, dtype=np.float32)
+            
+            out = np.zeros(n_samples, dtype=np.float32)
+            for i in range(n_samples):
+                out[i] = self.buf[self.read_idx]
+                self.read_idx = (self.read_idx + 1) % len(self.buf)
+            self.count -= n_samples
+            
+            if self.count == 0:
+                self.prebuffering = True
+                
+            return out
 
 class ModernCamUI(ctk.CTk):
     def __init__(self, ser):
@@ -48,6 +102,7 @@ class ModernCamUI(ctk.CTk):
         self.mic_enabled = False
         self.audio_gain = 1.0
         self.audio_queue = queue.Queue(maxsize=50)
+        self.jitter_buffer = AudioJitterBuffer()
         self.audio_stream = None
         self.current_db = -60.0
         
@@ -286,34 +341,56 @@ class ModernCamUI(ctk.CTk):
             choice = self.aud_dev_combo.get()
             dev_idx = self.audio_devices.get(choice, None)
 
+        target_sr = SAMPLE_RATE
+        if dev_idx is not None:
+            try:
+                dev_info = sd.query_devices(dev_idx, 'output')
+                target_sr = int(dev_info.get('default_samplerate', SAMPLE_RATE))
+            except:
+                pass
+
+        ratio = SAMPLE_RATE / target_sr
+
         def audio_callback(outdata, frames, time_info, status):
-            needed = frames
-            out = np.zeros(needed, dtype=np.float32)
-            pos = 0
-            while pos < needed:
-                try:
-                    chunk = self.audio_queue.get_nowait()
-                except queue.Empty:
-                    break
-                take = min(len(chunk), needed - pos)
-                out[pos:pos+take] = chunk[:take]
-                pos += take
-            outdata[:, 0] = out
+            needed_in = int(round(frames * ratio))
+            if needed_in < 1: needed_in = 1
+            
+            concat_in = self.jitter_buffer.read(needed_in)
+            if abs(ratio - 1.0) > 1e-4 and len(concat_in) > 1:
+                x_old = np.linspace(0, 1, len(concat_in), endpoint=False)
+                x_new = np.linspace(0, 1, frames, endpoint=False)
+                out = np.interp(x_new, x_old, concat_in)
+            else:
+                out = concat_in
+
+            outdata[:, 0] = out.astype(np.float32)
 
         try:
             self.audio_stream = sd.OutputStream(
                 device=dev_idx,
-                samplerate=SAMPLE_RATE,
+                samplerate=target_sr,
                 channels=CHANNELS,
                 dtype="float32",
-                latency=0.08,
+                latency="low",
                 callback=audio_callback
             )
             self.audio_stream.start()
             self.mic_enabled = True
         except Exception as e:
-            print(f"[AUDIO OUTPUT ERROR]: {e}")
-            self.update_info(f"Audio Output Error:\n{e}")
+            try:
+                self.audio_stream = sd.OutputStream(
+                    device=dev_idx,
+                    samplerate=SAMPLE_RATE,
+                    channels=CHANNELS,
+                    dtype="float32",
+                    latency="low",
+                    callback=audio_callback
+                )
+                self.audio_stream.start()
+                self.mic_enabled = True
+            except Exception as e2:
+                print(f"[AUDIO OUTPUT ERROR]: {e2}")
+                self.update_info(f"Audio Output Error:\n{e2}")
 
     def stop_audio_output(self):
         self.mic_enabled = False
@@ -465,13 +542,7 @@ class ModernCamUI(ctk.CTk):
                             self.fft_bands = 0.35 * bands_norm + 0.65 * self.fft_bands
 
                         if self.mic_enabled:
-                            try:
-                                self.audio_queue.put_nowait(samples)
-                            except queue.Full:
-                                try:
-                                    self.audio_queue.get_nowait()
-                                    self.audio_queue.put_nowait(samples)
-                                except: pass
+                            self.jitter_buffer.write(samples)
 
                 # Update Stats timer
                 current_time = time.time()

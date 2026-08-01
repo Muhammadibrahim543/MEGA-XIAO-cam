@@ -433,11 +433,11 @@ static void camTask(void* arg) {
                 }
             }
             
-            // Audio streaming block - drain all available audio
+            // Audio streaming block - drain all available audio in 512-sample chunks
             if (usbWebcamAudioStreaming) {
                 while (true) {
-                    int16_t micBuf[1024]; // 2048 bytes
-                    size_t bytesRead = audio_read_mic(micBuf, 1024);
+                    int16_t micBuf[512]; // 1024 bytes
+                    size_t bytesRead = audio_read_mic(micBuf, 512);
                     if (bytesRead == 0) break;
                     
                     const uint32_t MAGIC_AUDIO = 0x87654321;
