@@ -17,10 +17,49 @@
 #include "display.h"
 #include <string.h>
 #include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/ringbuf.h"
+#include "freertos/task.h"
 
 // ─── ESP_I2S instance for PDM microphone ─────────────────────────
 static I2SClass i2sMic;
 static bool     s_micReady = false;
+static RingbufHandle_t audioRingBuf = NULL;
+static TaskHandle_t audioTaskHandle = NULL;
+
+static void audio_pump_task(void *pvParameters) {
+    while (true) {
+        if (!s_micReady || !audioRingBuf) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        int avail = i2sMic.available();
+        if (avail > 0) {
+            int16_t temp[1024]; // 2048 bytes
+            size_t want = avail;
+            if (want > sizeof(temp)) want = sizeof(temp);
+            want &= ~1; // Ensure 16-bit alignment
+            
+            if (want > 0) {
+                size_t got = i2sMic.readBytes((char*)temp, want);
+                if (got > 0) {
+                    if (MIC_VOLUME_GAIN != 0) {
+                        size_t samples = got / sizeof(int16_t);
+                        for (size_t i = 0; i < samples; i++) {
+                            int32_t s = (int32_t)temp[i] << MIC_VOLUME_GAIN;
+                            if (s >  32767) s =  32767;
+                            if (s < -32768) s = -32768;
+                            temp[i] = (int16_t)s;
+                        }
+                    }
+                    xRingbufferSend(audioRingBuf, temp, got, pdMS_TO_TICKS(10));
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
 
 // ─── audio_mic_init ───────────────────────────────────────────────
 bool audio_mic_init() {
@@ -29,10 +68,20 @@ bool audio_mic_init() {
     // XIAO ESP32-S3 Sense PDM pins: CLK=42, DATA=41
     i2sMic.setPinsPdmRx(MIC_CLK_PIN, MIC_DATA_PIN);
 
+    // Note: I2S DMA buffer size is hardcoded in ESP_I2S.cpp (2880 bytes).
     if (!i2sMic.begin(I2S_MODE_PDM_RX, MIC_SAMPLE_RATE,
-                      I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO,
-                      16384)) {
+                      I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO)) {
         return false;
+    }
+
+    if (!audioRingBuf) {
+        // 16384 bytes = ~512ms of audio
+        audioRingBuf = xRingbufferCreate(16384, RINGBUF_TYPE_BYTEBUF);
+    }
+    
+    if (!audioTaskHandle) {
+        // Run on Core 0 to leave Core 1 free for Camera/Arduino loop
+        xTaskCreateUniversal(audio_pump_task, "audio_pump", 4096, NULL, 5, &audioTaskHandle, 0);
     }
 
     s_micReady = true;
@@ -44,6 +93,14 @@ void audio_mic_deinit() {
     if (!s_micReady) return;
     i2sMic.end();
     s_micReady = false;
+    
+    if (audioRingBuf) {
+        size_t size;
+        void *data;
+        while ((data = xRingbufferReceive(audioRingBuf, &size, 0)) != NULL) {
+            vRingbufferReturnItem(audioRingBuf, data);
+        }
+    }
 }
 
 // ─── Next file name on SD ─────────────────────────────────────────
@@ -166,31 +223,20 @@ void audio_stop(AudioState& as) {
 
 // ─── audio_read_mic ───────────────────────────────────────────────
 size_t audio_read_mic(int16_t* buf, size_t maxSamples) {
-    if (!s_micReady) return 0;
+    if (!s_micReady || !audioRingBuf) return 0;
     
-    int avail = i2sMic.available();
-    if (avail <= 0) return 0;
-    
-    // Read whatever is available in the DMA buffer without blocking
     size_t bytesWant = maxSamples * sizeof(int16_t);
-    if ((size_t)avail < bytesWant) {
-        bytesWant = avail;
-    }
-    bytesWant &= ~1; // Ensure 16-bit alignment
-    if (bytesWant == 0) return 0;
+    size_t size = 0;
     
-    size_t got = i2sMic.readBytes((char*)buf, bytesWant);
-    
-    if (got > 0) {
-        size_t samples = got / sizeof(int16_t);
-        for (size_t i = 0; i < samples; i++) {
-            int32_t s = (int32_t)buf[i] << MIC_VOLUME_GAIN;
-            if (s >  32767) s =  32767;
-            if (s < -32768) s = -32768;
-            buf[i] = (int16_t)s;
-        }
+    void *data = xRingbufferReceiveUpTo(audioRingBuf, &size, 0, bytesWant);
+    if (data != NULL) {
+        memcpy(buf, data, size);
+        vRingbufferReturnItem(audioRingBuf, data);
+        
+        // Volume gain is already applied in the audio_pump_task
+        return size;
     }
-    return got;
+    return 0;
 }
 
 // ─── audio_draw_ui ────────────────────────────────────────────────

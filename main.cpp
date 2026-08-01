@@ -433,9 +433,9 @@ static void camTask(void* arg) {
                 }
             }
             
-            // Audio streaming block - optimized for minimum USB CDC overhead to preserve video framerate
+            // Audio streaming block - drain the software RingBuffer
             if (usbWebcamAudioStreaming) {
-                for (int a = 0; a < 4; a++) {
+                for (int a = 0; a < 10; a++) {
                     int16_t micBuf[1024]; // 2048 bytes chunk
                     size_t bytesRead = audio_read_mic(micBuf, 1024);
                     if (bytesRead == 0) break;
