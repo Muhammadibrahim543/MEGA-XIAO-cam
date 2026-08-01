@@ -43,11 +43,12 @@ enum Screen {
     SCR_QR_READER,     // QR Code Reader
     SCR_LIVE_RADIO,    // ESP-NOW live voice with camera off
     SCR_USB_WEBCAM,    // Stream to PC via Native USB
+    SCR_WIFI_STREAM,   // Wi-Fi Data Stream / Mesh
     SCR_COUNT
 };
 
 // ─── Main Menu Items ──────────────────────────────────────────────
-#define MAIN_MENU_COUNT  8
+#define MAIN_MENU_COUNT  9
 
 struct MainMenuItem {
     const char* label;

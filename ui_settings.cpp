@@ -17,6 +17,7 @@ static const MainMenuItem MM_ITEMS[MAIN_MENU_COUNT] = {
     { "SETTINGS",      "Camera configuration",   C_ACCENT,   SCR_SETTINGS   },
     { "ESP-NOW",       "Wireless streaming",     0xF81F,     SCR_ESPNOW     },
     { "USB WEBCAM",    "Stream to PC via USB",   0x07FF,     SCR_USB_WEBCAM },
+    { "WI-FI STREAM",  "Telemetry & File sync",  C_GREEN,    SCR_WIFI_STREAM}
 };
 
 // ─── Spring constants ─────────────────────────────────────────────

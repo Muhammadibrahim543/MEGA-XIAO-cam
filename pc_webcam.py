@@ -3,9 +3,16 @@ import serial.tools.list_ports
 import cv2
 import numpy as np
 import time
+import struct
 import threading
 import customtkinter as ctk
 from PIL import Image
+
+try:
+    import pyvirtualcam
+    HAS_PYVIRTUALCAM = True
+except ImportError:
+    HAS_PYVIRTUALCAM = False
 
 # Initialize CustomTkinter aesthetics
 ctk.set_appearance_mode("Dark")  # Modes: "System" (standard), "Dark", "Light"
@@ -22,10 +29,12 @@ class ModernCamUI(ctk.CTk):
         self.geometry("1100x700")
         self.minsize(800, 500)
         
-        # Threading for video stream
+        # Threading & Virtual Cam
         self.current_frame = None
         self.frame_lock = threading.Lock()
         self.running = True
+        self.vcam = None
+        self.vcam_enabled = False
 
         # Configure Grid Layout
         self.grid_columnconfigure(1, weight=1)
@@ -34,7 +43,7 @@ class ModernCamUI(ctk.CTk):
         # ================= LEFT PANEL (Controls) =================
         self.sidebar = ctk.CTkFrame(self, width=280, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_rowconfigure(9, weight=1)  # Push bottom elements down
+        self.sidebar.grid_rowconfigure(11, weight=1)  # Push bottom elements down
 
         # Logo / Title
         self.logo_label = ctk.CTkLabel(self.sidebar, text="Camera Controls", font=ctk.CTkFont(size=20, weight="bold"))
@@ -79,7 +88,7 @@ class ModernCamUI(ctk.CTk):
 
         # Switches Frame (H-Mirror & V-Flip)
         self.switches_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        self.switches_frame.grid(row=8, column=0, padx=20, pady=20, sticky="ew")
+        self.switches_frame.grid(row=8, column=0, padx=20, pady=10, sticky="ew")
         self.switches_frame.grid_columnconfigure((0, 1), weight=1)
 
         self.hm_switch = ctk.CTkSwitch(self.switches_frame, text="H-Mirror", command=lambda: self.send_cmd('HM', self.hm_switch.get()))
@@ -87,6 +96,10 @@ class ModernCamUI(ctk.CTk):
         
         self.vf_switch = ctk.CTkSwitch(self.switches_frame, text="V-Flip", command=lambda: self.send_cmd('VF', self.vf_switch.get()))
         self.vf_switch.grid(row=0, column=1, sticky="w")
+
+        # Virtual Cam Switch (for Google Meet / Zoom / Discord)
+        self.vcam_switch = ctk.CTkSwitch(self.sidebar, text="Virtual Cam (Meet/Zoom)", command=self.toggle_vcam)
+        self.vcam_switch.grid(row=9, column=0, padx=20, pady=(5, 10), sticky="w")
 
         # Info Box at the bottom
         self.info_box = ctk.CTkTextbox(self.sidebar, height=100, corner_radius=10)
@@ -107,6 +120,9 @@ class ModernCamUI(ctk.CTk):
         self.stream_thread = threading.Thread(target=self.receive_stream, daemon=True)
         self.stream_thread.start()
         
+        # Request ESP32 to start streaming camera feed
+        self.send_cmd('CAM', 1)
+
         self.update_video()
 
     def send_cmd(self, prefix, val):
@@ -124,6 +140,25 @@ class ModernCamUI(ctk.CTk):
         self.q_label.configure(text=f"Quality (Lower = Better): {val}")
         self.send_cmd('Q', val)
 
+    def toggle_vcam(self):
+        if not HAS_PYVIRTUALCAM:
+            self.vcam_switch.deselect()
+            self.update_info("pyvirtualcam not installed!\nRun: pip install pyvirtualcam")
+            return
+        
+        if self.vcam_switch.get() == 1:
+            self.vcam_enabled = True
+            self.update_info("Virtual Cam Starting...")
+        else:
+            self.vcam_enabled = False
+            if self.vcam:
+                try:
+                    self.vcam.close()
+                except:
+                    pass
+                self.vcam = None
+            self.update_info("Virtual Cam Stopped.")
+
     def receive_stream(self):
         buffer = bytearray()
         fps_time = time.time()
@@ -137,40 +172,83 @@ class ModernCamUI(ctk.CTk):
                     
                 buffer.extend(chunk)
                 
-                # Search for MAGIC_VID header
-                vid_idx = buffer.find(MAGIC_VID)
-                
-                if vid_idx != -1:
-                    if len(buffer) >= vid_idx + 8:
-                        size_bytes = buffer[vid_idx+4 : vid_idx+8]
-                        frame_size = struct.unpack('<I', size_bytes)[0]
+                while True:
+                    # Search for MAGIC_VID header (0x12345678)
+                    vid_idx = buffer.find(MAGIC_VID)
+                    
+                    if vid_idx == -1:
+                        # Keep last 3 bytes in case magic is split across chunks
+                        if len(buffer) > 4:
+                            buffer = buffer[-3:]
+                        break
+                    
+                    # Discard any noise/data before magic header
+                    if vid_idx > 0:
+                        buffer = buffer[vid_idx:]
                         
-                        if len(buffer) >= vid_idx + 8 + frame_size:
-                            # Extract complete JPEG frame
-                            frame_data = buffer[vid_idx+8 : vid_idx+8+frame_size]
-                            buffer = buffer[vid_idx+8+frame_size:]
-                            
-                            img_array = np.frombuffer(frame_data, dtype=np.uint8)
-                            frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-                            
-                            if frame is not None:
-                                # Convert BGR to RGB for PIL
-                                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                                
-                                with self.frame_lock:
-                                    self.current_frame = frame
-                                
-                                frame_count += 1
-                                current_time = time.time()
-                                if current_time - fps_time >= 1.0:
-                                    fps = frame_count / (current_time - fps_time)
-                                    kb_size = frame_size / 1024
-                                    info_str = f"FPS: {fps:.1f}\nSize: {kb_size:.1f} KB\nRes: {frame.shape[1]}x{frame.shape[0]}"
-                                    self.update_info(info_str)
-                                    fps_time = current_time
-                                    frame_count = 0
+                    if len(buffer) < 8:
+                        break  # Wait for 4-byte magic + 4-byte size header
+                        
+                    size_bytes = buffer[4:8]
+                    frame_size = struct.unpack('<I', size_bytes)[0]
+                    
+                    # Sanity check frame size (max 2MB)
+                    if frame_size <= 0 or frame_size > 2 * 1024 * 1024:
+                        buffer = buffer[4:]  # Corrupted header, skip magic
+                        continue
+                        
+                    if len(buffer) < 8 + frame_size:
+                        break  # Wait for complete JPEG frame data
+                        
+                    # Extract complete JPEG frame
+                    frame_data = buffer[8 : 8 + frame_size]
+                    buffer = buffer[8 + frame_size :]
+                    
+                    img_array = np.frombuffer(frame_data, dtype=np.uint8)
+                    frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                    
+                    if frame is not None:
+                        # Convert BGR to RGB for PIL & VirtualCam
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        
+                        with self.frame_lock:
+                            self.current_frame = frame
+
+                        # Send frame to Virtual Camera if active
+                        if self.vcam_enabled and HAS_PYVIRTUALCAM:
+                            h, w, _ = frame.shape
+                            if self.vcam is None or self.vcam.width != w or self.vcam.height != h:
+                                if self.vcam:
+                                    try:
+                                        self.vcam.close()
+                                    except:
+                                        pass
+                                try:
+                                    self.vcam = pyvirtualcam.Camera(width=w, height=h, fps=30, fmt=pyvirtualcam.PixelFormat.RGB)
+                                    self.update_info(f"Virtual Cam Active:\n{self.vcam.device}")
+                                except Exception as e:
+                                    self.vcam_enabled = False
+                                    self.vcam_switch.deselect()
+                                    self.update_info(f"Virtual Cam Error:\n{e}")
+                            if self.vcam:
+                                try:
+                                    self.vcam.send(frame)
+                                except Exception as e:
+                                    pass
+                        
+                        frame_count += 1
+                        current_time = time.time()
+                        if current_time - fps_time >= 1.0:
+                            fps = frame_count / (current_time - fps_time)
+                            kb_size = frame_size / 1024
+                            vcam_str = f" | VCam: ON" if self.vcam_enabled else ""
+                            info_str = f"FPS: {fps:.1f}\nSize: {kb_size:.1f} KB\nRes: {frame.shape[1]}x{frame.shape[0]}{vcam_str}"
+                            self.update_info(info_str)
+                            fps_time = current_time
+                            frame_count = 0
             except Exception as e:
-                time.sleep(0.1)
+                print(f"[STREAM ERROR]: {e}")
+                time.sleep(0.05)
 
     def update_info(self, text):
         def _update():
@@ -212,12 +290,20 @@ class ModernCamUI(ctk.CTk):
         
     def on_closing(self):
         self.running = False
-        self.ser.close()
+        self.send_cmd('CAM', 0)
+        if self.vcam:
+            try:
+                self.vcam.close()
+            except:
+                pass
+            self.vcam = None
+        try:
+            self.ser.close()
+        except:
+            pass
         self.destroy()
 
 def main():
-    import struct # Required for parsing frame size
-    
     print("ESP32-S3 Vision Hub - Modern UI")
     print("-" * 30)
     print("Available ports:")

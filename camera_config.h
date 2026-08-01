@@ -259,10 +259,9 @@ inline bool camera_init_rgb565(const CamSettings& s) {
 
     // For large resolutions each RGB565 frame is huge.
     // fb_count=2 at XGA = 2 × 1.5 MB = 3 MB just for camera DMA.
-    // Use 1 buffer for SVGA and above to leave PSRAM for ping-pong buffers.
-    uint32_t frameBytes = (uint32_t)FRAME_OPTIONS[s.frameIdx].w
-                        * FRAME_OPTIONS[s.frameIdx].h * 2;
-    cfg.fb_count      = (frameBytes > 800UL * 600 * 2) ? 1 : 2;
+    // CRITICAL: Must use 2 buffers to prevent frame starvation when
+    // multiple tasks (TFT UI + WiFi stream) access camera simultaneously.
+    cfg.fb_count      = 2;  // Force 2 buffers for multi-task access
 
     cfg.grab_mode     = CAMERA_GRAB_LATEST;
     cfg.fb_location   = CAMERA_FB_IN_PSRAM;

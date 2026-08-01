@@ -26,6 +26,7 @@
 #include "espnow_stream.h"
 #include "audio.h"
 #include "live_radio.h"
+#include "wifi_stream.h"
 
 // ─── Buttons ──────────────────────────────────────────────────────
 #define BTN_UP       1
@@ -62,11 +63,11 @@ static bool          qrSaved       = false;
 static uint8_t*          pingBuf      = nullptr;
 static uint8_t*          pongBuf      = nullptr;
 static size_t            pingPongSize = 0;
-static volatile uint8_t* readyBuf    = nullptr;
-static volatile uint16_t readyW      = 0;
-static volatile uint16_t readyH      = 0;
-static volatile bool     frameReady  = false;
-static SemaphoreHandle_t frameMutex;
+volatile uint8_t* readyBuf    = nullptr;  // Shared with wifi_stream.cpp
+volatile uint16_t readyW      = 0;        // Shared with wifi_stream.cpp
+volatile uint16_t readyH      = 0;        // Shared with wifi_stream.cpp
+volatile bool     frameReady  = false;    // Shared with wifi_stream.cpp
+SemaphoreHandle_t frameMutex;             // Shared with wifi_stream.cpp
 
 // ─── FPS counters ─────────────────────────────────────────────────
 static volatile uint32_t captureFps  = 0;
@@ -823,6 +824,45 @@ static void closeUsbWebcamScreen() {
     switchScreen(SCR_MAIN_MENU);
 }
 
+static void openWiFiStreamScreen() {
+    uiState.screen = SCR_WIFI_STREAM;
+    delay(40);
+    
+    pauseCameraTask();
+    
+    espnow_stream_stop(false);
+    espnow_stream_deinit(false);
+    uiState.streamActive    = false;
+    uiState.streamConnected = false;
+
+    audio_mic_deinit();
+    recorder_mic_deinit();
+    esp_camera_deinit();
+    delay(120);
+    
+    // IMPORTANT: Initialize camera in Native JPEG mode for stream!
+    // Keep camTask PAUSED to isolate hardware and prevent stack overflow
+    if (!camera_init(camCfg)) {
+        Serial.println("[WIFI STREAM] Camera Init Failed!");
+    }
+    
+    wifiStreamEnter();
+    wifiStreamSelectAction();
+}
+
+static void closeWiFiStreamScreen() {
+    wifiStreamLeave();
+    delay(50);
+    
+    esp_camera_deinit();
+    camera_init_rgb565(camCfg);
+    clearFrameState();
+
+    resumeCameraTask();
+
+    switchScreen(SCR_MAIN_MENU);
+}
+
 // ─── Input ────────────────────────────────────────────────────────
 static void handleInput() {
     pollBtn(bUp, BTN_UP);
@@ -849,6 +889,10 @@ static void handleInput() {
                 return;
             case SCR_USB_WEBCAM:
                 closeUsbWebcamScreen();
+                return;
+            case SCR_WIFI_STREAM:
+                closeWiFiStreamScreen();
+                // switchScreen(SCR_MAIN_MENU);
                 return;
             case SCR_QR_READER:
                 closeQRScreen();
@@ -899,6 +943,9 @@ static void handleInput() {
                     switchScreen(SCR_ESPNOW);
                 } else if (dest == SCR_USB_WEBCAM) {
                     openUsbWebcamScreen();
+                } else if (dest == SCR_WIFI_STREAM) {
+                    openWiFiStreamScreen();
+                    // switchScreen(SCR_WIFI_STREAM);
                 } else if (dest != SCR_MAIN_MENU) {
                     switchScreen(dest);
                 }
@@ -1002,6 +1049,11 @@ static void handleInput() {
             if (bOk.shortPress) {
                 usbWebcamStreaming = !usbWebcamStreaming;
                 uiState.dirtyMenu = true;
+            }
+            break;
+        case SCR_WIFI_STREAM:
+            if (bOk.shortPress) {
+                wifiStreamSelectAction();
             }
             break;
 
@@ -1338,6 +1390,15 @@ void loop() {
             }
             ui_draw_usb_webcam(spMenu, uiState, usbWebcamStreaming);
             uiState.dirtyMenu = false;
+        }
+    } else if (uiState.screen == SCR_WIFI_STREAM) {
+        wifiStreamTick();
+        static uint32_t wifiUiT = 0;
+        if (millis() - wifiUiT > 250 || uiState.dirtyMenu || uiState.dirtyFeed) {
+            wifiUiT = millis();
+            drawWiFiStream(spFeed, spMenu);
+            uiState.dirtyMenu = false;
+            uiState.dirtyFeed = false;
         }
     }
 }
