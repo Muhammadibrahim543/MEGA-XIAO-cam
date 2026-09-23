@@ -11,6 +11,7 @@
 // ══════════════════════════════════════════════════════════════════
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <esp_now.h>
 #include "esp_camera.h"
 
@@ -20,7 +21,7 @@
 #define VID_FRAME_START   0x12
 #define VID_FRAME_CHUNK   0x13
 #define VID_FRAME_END     0x14
-#define VID_ACK           0x15
+#define VID_AUDIO         0x15   // 8kHz G.711 u-law audio payload (165B)
 #define VID_ERROR         0x16
 
 // ─── Protocol constants ───────────────────────────────────────────
@@ -31,10 +32,9 @@
 #define FRAME_TIMEOUT_MS     300
 
 // ── Chunk delay tuning ────────────────────────────────────────────
-// 1ms is the sweet spot: enough for WiFi task to drain TX queue,
-// not so much that it kills FPS. Double-buffer on receiver means
-// we don't need extra delay to "protect" the decode window.
-#define CHUNK_DELAY_MS         1   // 1ms — proven minimum for ESP-NOW stability
+// Non-blocking wait on WiFi PHY send callback with minimal microsecond yield.
+// Double-buffer on receiver means we don't need extra delay to protect decode.
+#define CHUNK_DELAY_MS         0   // 0ms — s_lastSendDone callback already gates queue
 
 // ── Adaptive frame drop ───────────────────────────────────────────
 // If the previous frame's chunks are still in-flight, skip this frame
@@ -98,6 +98,9 @@ bool espnow_stream_active();
 
 // Deinit (called when leaving SCR_ESPNOW screen)
 void espnow_stream_deinit(bool resumeCamera = true);
+
+// Drain audio ring buffer and send VID_AUDIO packets over ESP-NOW
+void espnow_stream_audio_pump();
 
 // ─── Frame rate target ────────────────────────────────────────────
 extern uint32_t g_streamFrameIntervalMs;  // default 80 ms (~12 FPS, was 150ms ~6 FPS)

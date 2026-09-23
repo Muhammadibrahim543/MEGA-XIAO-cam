@@ -30,20 +30,20 @@ static TaskHandle_t audioTaskHandle = NULL;
 static void audio_pump_task(void *pvParameters) {
     while (true) {
         if (!s_micReady || !audioRingBuf) {
-            vTaskDelay(pdMS_TO_TICKS(10));
+            vTaskDelay(pdMS_TO_TICKS(15));
             continue;
         }
 
         int avail = i2sMic.available();
-        if (avail > 0) {
+        if (avail > 0 && s_micReady) {
             int16_t temp[1024]; // 2048 bytes
             size_t want = avail;
             if (want > sizeof(temp)) want = sizeof(temp);
             want &= ~1; // Ensure 16-bit alignment
             
-            if (want > 0) {
+            if (want > 0 && s_micReady) {
                 size_t got = i2sMic.readBytes((char*)temp, want);
-                if (got > 0) {
+                if (got > 0 && s_micReady) {
                     if (MIC_VOLUME_GAIN != 0) {
                         size_t samples = got / sizeof(int16_t);
                         for (size_t i = 0; i < samples; i++) {
@@ -80,8 +80,8 @@ bool audio_mic_init() {
     }
     
     if (!audioTaskHandle) {
-        // Run on Core 0 to leave Core 1 free for Camera/Arduino loop
-        xTaskCreateUniversal(audio_pump_task, "audio_pump", 4096, NULL, 5, &audioTaskHandle, 0);
+        // Priority 2 on Core 0 so it never starves camera or WiFi interrupts
+        xTaskCreateUniversal(audio_pump_task, "audio_pump", 4096, NULL, 2, &audioTaskHandle, 0);
     }
 
     s_micReady = true;
@@ -91,8 +91,9 @@ bool audio_mic_init() {
 // ─── audio_mic_deinit ─────────────────────────────────────────────
 void audio_mic_deinit() {
     if (!s_micReady) return;
-    i2sMic.end();
     s_micReady = false;
+    vTaskDelay(pdMS_TO_TICKS(30)); // Allow pump task to finish current read cycle
+    i2sMic.end();
     
     if (audioRingBuf) {
         size_t size;

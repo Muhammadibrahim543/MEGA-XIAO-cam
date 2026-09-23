@@ -11,6 +11,8 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
+#include <ArduinoJson.h>
+#include "mbedtls/base64.h"
 #include "esp_log.h"
 #include "esp_camera.h"
 #include "esp_heap_caps.h"
@@ -27,6 +29,21 @@
 #include "audio.h"
 #include "live_radio.h"
 #include "wifi_stream.h"
+
+// ─── Display Rotation Configuration ──────────────────────────────
+// Default 0: 180-degree flip (inverted from original 2) so upside-down mounted display is right-side up.
+#define DEFAULT_TFT_ROTATION 0
+static uint8_t currentRotation = DEFAULT_TFT_ROTATION;
+
+// ─── Remote Virtual Buttons (from PC Dashboard) ───────────────────
+static volatile bool remoteBtnUp     = false;
+static volatile bool remoteBtnOk     = false;
+static volatile bool remoteBtnDn     = false;
+static volatile bool remoteBtnBack   = false;
+static volatile bool remoteUpPulse   = false;
+static volatile bool remoteOkPulse   = false;
+static volatile bool remoteDnPulse   = false;
+static volatile bool remoteBackPulse = false;
 
 // ─── Buttons ──────────────────────────────────────────────────────
 #define BTN_UP       1
@@ -101,7 +118,7 @@ static bool liveRadioCleanupPending = false;
 static uint32_t liveRadioCleanupAtMs = 0;
 
 // ─── Function Prototypes ──────────────────────────────────────────
-static void pollBtn(Btn& b, uint8_t pin);
+static void pollBtn(Btn& b, uint8_t pin, bool remoteState = false);
 static bool longPressed(Btn& b);
 static bool holdRepeat(Btn& b);
 static void clearFrameState();
@@ -132,9 +149,13 @@ static void handleInput();
 void setup();
 void loop();
 
-static void pollBtn(Btn& b, uint8_t pin) {
+static void pollBtn(Btn& b, uint8_t pin, bool remoteState, volatile bool& remotePulse) {
     b.shortPress = false;
-    bool raw = (digitalRead(pin) == LOW);
+    if (remotePulse) {
+        b.shortPress = true;
+        remotePulse = false;
+    }
+    bool raw = (digitalRead(pin) == LOW) || remoteState;
     if (raw && !b.last) {
         b.downAt       = millis();
         b.longFired    = false;
@@ -393,46 +414,6 @@ static void camTask(void* arg) {
         if (!fb) { vTaskDelay(1); continue; }
 
         if (uiState.screen == SCR_USB_WEBCAM) {
-            while (Serial.available()) {
-                static String serialCmd = "";
-                char c = Serial.read();
-                if (c == '\n') {
-                    serialCmd.trim();
-                    if (serialCmd.startsWith("SET:")) {
-                        if (serialCmd.startsWith("SET:CAM:")) {
-                            usbWebcamStreaming = (serialCmd.substring(8).toInt() != 0);
-                            uiState.dirtyMenu = true;
-                        }
-                        else if (serialCmd.startsWith("SET:MIC:")) {
-                            bool enable = (serialCmd.substring(8).toInt() != 0);
-                            if (enable && !usbWebcamAudioStreaming) {
-                                audio_mic_init();
-                                usbWebcamAudioStreaming = true;
-                            } else if (!enable && usbWebcamAudioStreaming) {
-                                usbWebcamAudioStreaming = false;
-                                audio_mic_deinit();
-                            }
-                            uiState.dirtyMenu = true;
-                        }
-                        else {
-                            sensor_t *s = esp_camera_sensor_get();
-                            if (s) {
-                                if (serialCmd.startsWith("SET:B:")) s->set_brightness(s, serialCmd.substring(6).toInt());
-                                else if (serialCmd.startsWith("SET:C:")) s->set_contrast(s, serialCmd.substring(6).toInt());
-                                else if (serialCmd.startsWith("SET:S:")) s->set_saturation(s, serialCmd.substring(6).toInt());
-                                else if (serialCmd.startsWith("SET:HM:")) s->set_hmirror(s, serialCmd.substring(7).toInt());
-                                else if (serialCmd.startsWith("SET:VF:")) s->set_vflip(s, serialCmd.substring(7).toInt());
-                                else if (serialCmd.startsWith("SET:Q:")) s->set_quality(s, serialCmd.substring(6).toInt());
-                                else if (serialCmd.startsWith("SET:RES:")) s->set_framesize(s, (framesize_t)serialCmd.substring(8).toInt());
-                            }
-                        }
-                    }
-                    serialCmd = "";
-                } else if (c != '\r') {
-                    if (serialCmd.length() < 32) serialCmd += c;
-                }
-            }
-            
             // Audio streaming block - drain the software RingBuffer
             if (usbWebcamAudioStreaming) {
                 for (int a = 0; a < 10; a++) {
@@ -632,6 +613,14 @@ static void renderLiveFrame() {
     spFeed.setTextColor(C_WHITE, TFT_BLACK);
     spFeed.setTextSize(1);
     spFeed.drawString(fbuf, 4, 2);
+
+    float coreT = temperatureRead();
+    char tbuf[12];
+    snprintf(tbuf, sizeof(tbuf), "%.0fC", coreT);
+    uint16_t tc = (coreT < 55.0f) ? C_ACCENT2 : (coreT < 70.0f) ? C_ORANGE : C_RED;
+    spFeed.setTextColor(tc, TFT_BLACK);
+    spFeed.drawString(tbuf, DISP_W - 28, 2);
+
     if (uiState.recording) {
         bool blink = ((millis()/400)&1);
         spFeed.fillCircle(8, FEED_H-10, 4, blink ? C_RED : C_DKGREY);
@@ -658,8 +647,8 @@ static void drawVfPanel() {
              FRAME_OPTIONS[camCfg.recFrameIdx].label);
     spMenu.print(buf);
     spMenu.setTextColor(C_ACCENT,C_BG); spMenu.setCursor(5,34);
-    snprintf(buf,sizeof(buf),"Q:%d  C%lu D%lu fps",
-             camCfg.quality, captureFps, displayFps);
+    snprintf(buf,sizeof(buf),"Q:%d  C%lu D%lu fps  %.0fC",
+             camCfg.quality, captureFps, displayFps, temperatureRead());
     spMenu.print(buf);
     spMenu.pushSprite(0, MENU_Y);
 }
@@ -772,6 +761,23 @@ static void closeLiveRadioScreen() {
     liveRadioCleanupAtMs    = millis() + 250;
 }
 
+// ─── ESP-NOW Screen ───────────────────────────────────────────────
+static void openEspNowScreen() {
+    if (uiState.screen == SCR_USB_WEBCAM || usbWebcamStreaming) {
+        usbWebcamStreaming = false;
+        closeUsbWebcamScreen();
+    }
+    uiState.screen = SCR_ESPNOW;
+    delay(20);
+
+    espnow_stream_init();
+    audio_mic_init();
+
+    uiState.dirtyMenu = true;
+    uiState.dirtyFeed = true;
+    switchScreen(SCR_ESPNOW);
+}
+
 // ─── USB WebCam ───────────────────────────────────────────────────
 static void openUsbWebcamScreen() {
     usbWebcamStreaming = false;
@@ -866,48 +872,390 @@ static void closeWiFiStreamScreen() {
     switchScreen(SCR_MAIN_MENU);
 }
 
+static const char* getScreenName(Screen scr) {
+    switch (scr) {
+        case SCR_MAIN_MENU:   return "MAIN_MENU";
+        case SCR_VIEWFINDER:  return "VIEWFINDER";
+        case SCR_SETTINGS:    return "SETTINGS";
+        case SCR_FILES:       return "FILES";
+        case SCR_PLAYBACK:    return "PLAYBACK";
+        case SCR_ESPNOW:      return "ESPNOW";
+        case SCR_AUDIO:       return "AUDIO_REC";
+        case SCR_LIVE_RADIO:  return "LIVE_RADIO";
+        case SCR_QR_READER:   return "QR_READER";
+        case SCR_USB_WEBCAM:  return "USB_WEBCAM";
+        case SCR_WIFI_STREAM: return "WIFI_STREAM";
+        default:              return "UNKNOWN";
+    }
+}
+
+static void handleBackAction() {
+    if (uiState.recording) { stopRecording(); return; }
+    switch (uiState.screen) {
+        case SCR_PLAYBACK:
+            closePlayback();
+            return;
+        case SCR_ESPNOW:
+            espnow_stream_stop();
+            audio_mic_deinit();
+            uiState.streamActive = false;
+            switchScreen(SCR_MAIN_MENU);
+            return;
+        case SCR_AUDIO:
+            closeAudioScreen();
+            return;
+        case SCR_LIVE_RADIO:
+            closeLiveRadioScreen();
+            return;
+        case SCR_USB_WEBCAM:
+            closeUsbWebcamScreen();
+            return;
+        case SCR_WIFI_STREAM:
+            closeWiFiStreamScreen();
+            return;
+        case SCR_QR_READER:
+            closeQRScreen();
+            return;
+        case SCR_VIEWFINDER:
+            switchScreen(SCR_MAIN_MENU);
+            return;
+        case SCR_MAIN_MENU:
+            switchScreen(SCR_VIEWFINDER);
+            return;
+        default:
+            if (uiState.screen == SCR_SETTINGS) ui_eeprom_save(camCfg);
+            switchScreen(SCR_MAIN_MENU);
+            return;
+    }
+}
+
+static void handleFsLs(const char* path) {
+    if (!uiState.sdReady) {
+        Serial.println("{\"type\":\"FS_LS_RES\",\"error\":\"SD_NOT_READY\"}");
+        return;
+    }
+    FsFile dir = SD.open(path);
+    if (!dir || !dir.isDirectory()) {
+        Serial.println("{\"type\":\"FS_LS_RES\",\"error\":\"DIR_NOT_FOUND\"}");
+        return;
+    }
+    Serial.print("{\"type\":\"FS_LS_RES\",\"path\":\"");
+    Serial.print(path);
+    Serial.print("\",\"files\":[");
+    bool first = true;
+    while (true) {
+        FsFile f = dir.openNextFile();
+        if (!f) break;
+        if (!first) Serial.print(",");
+        first = false;
+        char name[64];
+        f.getName(name, sizeof(name));
+        bool isDir = f.isDirectory();
+        uint32_t size = f.size();
+        Serial.print("{\"name\":\"");
+        Serial.print(name);
+        Serial.print("\",\"isDir\":");
+        Serial.print(isDir ? "true" : "false");
+        Serial.print(",\"size\":");
+        Serial.print(size);
+        Serial.print("}");
+        f.close();
+    }
+    dir.close();
+    Serial.println("]}");
+}
+
+static void handleFsRead(const char* path, uint32_t offset, uint32_t size) {
+    if (!uiState.sdReady) {
+        Serial.println("{\"type\":\"FS_READ_RES\",\"error\":\"SD_NOT_READY\"}");
+        return;
+    }
+    FsFile f = SD.open(path, O_READ);
+    if (!f || f.isDirectory()) {
+        Serial.println("{\"type\":\"FS_READ_RES\",\"error\":\"FILE_NOT_FOUND\"}");
+        return;
+    }
+    if (!f.seek(offset)) {
+        f.close();
+        Serial.println("{\"type\":\"FS_READ_RES\",\"error\":\"SEEK_ERR\"}");
+        return;
+    }
+    uint8_t* buf = (uint8_t*)malloc(size);
+    if (!buf) {
+        f.close();
+        Serial.println("{\"type\":\"FS_READ_RES\",\"error\":\"OOM\"}");
+        return;
+    }
+    size_t n = f.read(buf, size);
+    f.close();
+    if (n == 0) {
+        free(buf);
+        Serial.println("{\"type\":\"FS_READ_RES\",\"error\":\"EOF\"}");
+        return;
+    }
+    size_t olen = 0;
+    mbedtls_base64_encode(NULL, 0, &olen, buf, n);
+    char* b64 = (char*)malloc(olen + 1);
+    if (!b64) {
+        free(buf);
+        Serial.println("{\"type\":\"FS_READ_RES\",\"error\":\"OOM_B64\"}");
+        return;
+    }
+    mbedtls_base64_encode((unsigned char*)b64, olen, &olen, buf, n);
+    b64[olen] = 0;
+    free(buf);
+    Serial.print("{\"type\":\"FS_READ_RES\",\"path\":\"");
+    Serial.print(path);
+    Serial.print("\",\"offset\":");
+    Serial.print(offset);
+    Serial.print(",\"size\":");
+    Serial.print(n);
+    Serial.print(",\"data\":\"");
+    Serial.print(b64);
+    Serial.println("\"}");
+    free(b64);
+}
+
+static void processSerialCommands() {
+    static String serialLine = "";
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n') {
+            serialLine.trim();
+            if (serialLine.length() > 0) {
+                // SET commands (from pc_webcam.py or dashboard)
+                if (serialLine.startsWith("SET:")) {
+                    if (serialLine.startsWith("SET:CAM:")) {
+                        int enable = serialLine.substring(8).toInt();
+                        if (enable != 0) {
+                            if (uiState.screen != SCR_USB_WEBCAM) {
+                                openUsbWebcamScreen();
+                            }
+                            usbWebcamStreaming = true;
+                        } else {
+                            usbWebcamStreaming = false;
+                            if (uiState.screen == SCR_USB_WEBCAM) {
+                                closeUsbWebcamScreen();
+                            }
+                        }
+                        uiState.dirtyMenu = true;
+                    }
+                    else if (serialLine.startsWith("SET:MIC:")) {
+                        bool enable = (serialLine.substring(8).toInt() != 0);
+                        if (enable) {
+                            if (!usbWebcamAudioStreaming) {
+                                audio_mic_init();
+                                usbWebcamAudioStreaming = true;
+                            }
+                        } else {
+                            if (usbWebcamAudioStreaming) {
+                                usbWebcamAudioStreaming = false;
+                                audio_mic_deinit();
+                            }
+                        }
+                        uiState.dirtyMenu = true;
+                    }
+                    else if (serialLine.startsWith("SET:ROT:")) {
+                        uint8_t rot = (uint8_t)serialLine.substring(8).toInt();
+                        if (rot == 0 || rot == 2) {
+                            currentRotation = rot;
+                            tft.setRotation(currentRotation);
+                            uiState.dirtyMenu = true;
+                            uiState.dirtyFeed = true;
+                            Serial.printf("{\"type\":\"ROT_CHANGE\",\"val\":%d}\n", currentRotation);
+                        }
+                    }
+                    else {
+                        sensor_t *s = esp_camera_sensor_get();
+                        if (s) {
+                            if (serialLine.startsWith("SET:B:")) s->set_brightness(s, serialLine.substring(6).toInt());
+                            else if (serialLine.startsWith("SET:C:")) s->set_contrast(s, serialLine.substring(6).toInt());
+                            else if (serialLine.startsWith("SET:S:")) s->set_saturation(s, serialLine.substring(6).toInt());
+                            else if (serialLine.startsWith("SET:HM:")) s->set_hmirror(s, serialLine.substring(7).toInt());
+                            else if (serialLine.startsWith("SET:VF:")) s->set_vflip(s, serialLine.substring(7).toInt());
+                            else if (serialLine.startsWith("SET:Q:")) s->set_quality(s, serialLine.substring(6).toInt());
+                            else if (serialLine.startsWith("SET:RES:")) s->set_framesize(s, (framesize_t)serialLine.substring(8).toInt());
+                        }
+                    }
+                }
+                // JSON commands (from web_dashboard.py / unified_dashboard.py)
+                else if (serialLine.startsWith("{")) {
+                    JsonDocument doc;
+                    DeserializationError err = deserializeJson(doc, serialLine);
+                    if (!err) {
+                        const char* cmd = doc["cmd"];
+                        if (cmd) {
+                            if (strcmp(cmd, "BTN_STATE") == 0) {
+                                int btnId = doc["val"] | -1;
+                                int state = doc["state"] | 0;
+                                if (btnId == 0) {
+                                    remoteBtnUp = (state > 0);
+                                    if (state > 0) remoteUpPulse = true;
+                                }
+                                else if (btnId == 1) {
+                                    remoteBtnDn = (state > 0);
+                                    if (state > 0) remoteDnPulse = true;
+                                }
+                                else if (btnId == 4) {
+                                    remoteBtnOk = (state > 0);
+                                    if (state > 0) remoteOkPulse = true;
+                                }
+                                else if (btnId == 5) {
+                                    if (state > 0) remoteBackPulse = true;
+                                }
+                            }
+                            else if (strcmp(cmd, "NAV") == 0) {
+                                const char* act = doc["action"];
+                                if (act) {
+                                    if (strcmp(act, "UP") == 0) {
+                                        remoteUpPulse = true;
+                                    }
+                                    else if (strcmp(act, "DOWN") == 0) {
+                                        remoteDnPulse = true;
+                                    }
+                                    else if (strcmp(act, "OK") == 0) {
+                                        remoteOkPulse = true;
+                                    }
+                                    else if (strcmp(act, "BACK") == 0) {
+                                        if (uiState.screen == SCR_USB_WEBCAM) {
+                                            closeUsbWebcamScreen();
+                                            switchScreen(SCR_MAIN_MENU);
+                                        } else {
+                                            remoteBackPulse = true;
+                                        }
+                                    }
+                                    else if (strcmp(act, "MENU") == 0) {
+                                        if (uiState.screen == SCR_MAIN_MENU) {
+                                            switchScreen(SCR_VIEWFINDER);
+                                        } else {
+                                            if (uiState.screen == SCR_USB_WEBCAM) closeUsbWebcamScreen();
+                                            switchScreen(SCR_MAIN_MENU);
+                                        }
+                                    }
+                                }
+                            }
+                            else if (strcmp(cmd, "SET_ROTATION") == 0) {
+                                int rot = doc["val"] | 0;
+                                if (rot == 0 || rot == 2) {
+                                    currentRotation = (uint8_t)rot;
+                                    tft.setRotation(currentRotation);
+                                    uiState.dirtyMenu = true;
+                                    uiState.dirtyFeed = true;
+                                    Serial.printf("{\"type\":\"ROT_CHANGE\",\"val\":%d}\n", currentRotation);
+                                }
+                            }
+                            else if (strcmp(cmd, "SET_SCREEN") == 0) {
+                                int scr = doc["screen"] | 0;
+                                if (scr >= 0 && scr < SCR_COUNT) {
+                                    if (scr == SCR_USB_WEBCAM && uiState.screen != SCR_USB_WEBCAM) {
+                                        openUsbWebcamScreen();
+                                        usbWebcamStreaming = true;
+                                    } else if (scr == SCR_ESPNOW && uiState.screen != SCR_ESPNOW) {
+                                        openEspNowScreen();
+                                    } else {
+                                        if (uiState.screen == SCR_USB_WEBCAM && scr != SCR_USB_WEBCAM) {
+                                            closeUsbWebcamScreen();
+                                        }
+                                        switchScreen((Screen)scr);
+                                    }
+                                }
+                            }
+                            else if (strcmp(cmd, "ESPNOW_START") == 0) {
+                                if (uiState.screen != SCR_ESPNOW) {
+                                    openEspNowScreen();
+                                }
+                                uiState.streamActive = true;
+                                espnow_stream_start();
+                                uiState.dirtyMenu = true;
+                            }
+                            else if (strcmp(cmd, "ESPNOW_STOP") == 0) {
+                                uiState.streamActive = false;
+                                espnow_stream_stop();
+                                uiState.dirtyMenu = true;
+                            }
+                            else if (strcmp(cmd, "START_STREAM") == 0) {
+                                if (uiState.screen != SCR_USB_WEBCAM) {
+                                    openUsbWebcamScreen();
+                                }
+                                usbWebcamStreaming = true;
+                            }
+                            else if (strcmp(cmd, "STOP_STREAM") == 0) {
+                                usbWebcamStreaming = false;
+                                if (uiState.screen == SCR_USB_WEBCAM) {
+                                    closeUsbWebcamScreen();
+                                }
+                            }
+                            else if (strcmp(cmd, "REC_START") == 0) {
+                                if (uiState.screen == SCR_VIEWFINDER && !uiState.recording) {
+                                    startRecording();
+                                }
+                            }
+                            else if (strcmp(cmd, "REC_STOP") == 0) {
+                                if (uiState.recording) {
+                                    stopRecording();
+                                }
+                            }
+                            else if (strcmp(cmd, "PING") == 0) {
+                                Serial.println("{\"type\":\"PONG\"}");
+                            }
+                            else if (strcmp(cmd, "FS_LS") == 0) {
+                                handleFsLs(doc["path"] | "/");
+                            }
+                            else if (strcmp(cmd, "FS_READ") == 0) {
+                                handleFsRead(doc["path"] | "", doc["offset"] | 0, doc["size"] | 512);
+                            }
+                        }
+                    }
+                }
+            }
+            serialLine = "";
+        } else if (c != '\r') {
+            if (serialLine.length() < 256) serialLine += c;
+        }
+    }
+}
+
+static void broadcastDeviceState() {
+    static uint32_t lastBroadcast = 0;
+    static Screen lastReportedScreen = (Screen)-1;
+    static bool lastReportedRec = false;
+
+    // In USB webcam mode during active streaming, minimize serial text overhead
+    if (uiState.screen == SCR_USB_WEBCAM && usbWebcamStreaming) return;
+
+    uint32_t now = millis();
+    bool stateChanged = (uiState.screen != lastReportedScreen || uiState.recording != lastReportedRec);
+
+    if (stateChanged || (now - lastBroadcast >= 500)) {
+        lastBroadcast = now;
+        lastReportedScreen = uiState.screen;
+        lastReportedRec = uiState.recording;
+
+        Serial.printf("{\"type\":\"STATE\",\"screen\":%d,\"screenName\":\"%s\",\"recording\":%s,\"fps\":%u,\"heap\":%u,\"psram\":%u,\"rotation\":%d,\"coreTemp\":%.1f}\n",
+            (int)uiState.screen,
+            getScreenName(uiState.screen),
+            uiState.recording ? "true" : "false",
+            displayFps,
+            esp_get_free_heap_size(),
+            heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+            currentRotation,
+            temperatureRead()
+        );
+    }
+}
+
 // ─── Input ────────────────────────────────────────────────────────
 static void handleInput() {
-    pollBtn(bUp, BTN_UP);
-    pollBtn(bOk, BTN_OK);
-    pollBtn(bDn, BTN_DN);
+    pollBtn(bUp, BTN_UP, remoteBtnUp, remoteUpPulse);
+    pollBtn(bOk, BTN_OK, remoteBtnOk, remoteOkPulse);
+    pollBtn(bDn, BTN_DN, remoteBtnDn, remoteDnPulse);
 
-    // Long-press OK: global / screen-specific exits
-    if (longPressed(bOk)) {
-        if (uiState.recording) { stopRecording(); return; }
-        switch (uiState.screen) {
-            case SCR_PLAYBACK:
-                closePlayback();
-                return;
-            case SCR_ESPNOW:
-                espnow_stream_stop();
-                uiState.streamActive = false;
-                switchScreen(SCR_MAIN_MENU);
-                return;
-            case SCR_AUDIO:
-                closeAudioScreen();
-                return;
-            case SCR_LIVE_RADIO:
-                closeLiveRadioScreen();
-                return;
-            case SCR_USB_WEBCAM:
-                closeUsbWebcamScreen();
-                return;
-            case SCR_WIFI_STREAM:
-                closeWiFiStreamScreen();
-                // switchScreen(SCR_MAIN_MENU);
-                return;
-            case SCR_QR_READER:
-                closeQRScreen();
-                return;
-            case SCR_VIEWFINDER:
-                switchScreen(SCR_MAIN_MENU);
-                return;
-            default:
-                if (uiState.screen == SCR_SETTINGS) ui_eeprom_save(camCfg);
-                switchScreen(SCR_MAIN_MENU);
-                return;
-        }
+    // Long-press OK or Remote Back: global / screen-specific exits
+    if (longPressed(bOk) || remoteBtnBack || remoteBackPulse) {
+        remoteBtnBack = false;
+        remoteBackPulse = false;
+        handleBackAction();
+        return;
     }
 
     switch (uiState.screen) {
@@ -916,6 +1264,12 @@ static void handleInput() {
             if (bOk.shortPress) {
                 if (uiState.recording) stopRecording();
                 else                   startRecording();
+            }
+            if (bUp.shortPress) {
+                switchScreen(SCR_MAIN_MENU);
+            }
+            if (bDn.shortPress) {
+                switchScreen(SCR_SETTINGS);
             }
             break;
 
@@ -936,14 +1290,7 @@ static void handleInput() {
                 } else if (dest == SCR_QR_READER) {
                     openQRScreen();
                 } else if (dest == SCR_ESPNOW) {
-                    static bool wifiReady = false;
-                    if (!wifiReady) {
-                        WiFi.mode(WIFI_AP_STA);
-                        WiFi.softAP("XIAO_CAM", "12345678", ESPNOW_CHANNEL);
-                        espnow_stream_init();
-                        wifiReady = true;
-                    }
-                    switchScreen(SCR_ESPNOW);
+                    openEspNowScreen();
                 } else if (dest == SCR_USB_WEBCAM) {
                     openUsbWebcamScreen();
                 } else if (dest == SCR_WIFI_STREAM) {
@@ -988,7 +1335,7 @@ static void handleInput() {
         case SCR_ESPNOW:
             if (bOk.shortPress) {
                 StreamState ss = espnow_stream_state();
-                if (ss == STREAM_IDLE || ss == STREAM_ERROR) {
+                if (ss == STREAM_IDLE || ss == STREAM_ERROR || ss == STREAM_PAUSED) {
                     uiState.streamActive = true;
                     espnow_stream_start();
                 } else {
@@ -1053,6 +1400,14 @@ static void handleInput() {
                 usbWebcamStreaming = !usbWebcamStreaming;
                 uiState.dirtyMenu = true;
             }
+            if (bUp.shortPress) {
+                closeUsbWebcamScreen();
+                switchScreen(SCR_MAIN_MENU);
+            }
+            if (bDn.shortPress) {
+                closeUsbWebcamScreen();
+                switchScreen(SCR_VIEWFINDER);
+            }
             break;
         case SCR_WIFI_STREAM:
             if (bOk.shortPress) {
@@ -1076,7 +1431,7 @@ void setup() {
     pinMode(BTN_DN, INPUT_PULLUP);
 
     tft.init();
-    tft.setRotation(2);
+    tft.setRotation(currentRotation);
     tft.fillScreen(TFT_BLACK);
     tft.setSwapBytes(true);
 
@@ -1182,6 +1537,9 @@ void setup() {
 
 // ─── Main loop — Core 0 ───────────────────────────────────────────
 void loop() {
+    processSerialCommands();
+    broadcastDeviceState();
+
     if (liveRadioCleanupPending && millis() >= liveRadioCleanupAtMs &&
         uiState.screen != SCR_LIVE_RADIO) {
         live_radio_shutdown_stack();
@@ -1290,8 +1648,8 @@ void loop() {
                 spFeed.drawString("LIVE TX", DISP_W/2-28, FEED_H/2-16);
                 spFeed.setTextSize(1);
                 const StreamStats& st = espnow_stream_stats();
-                char fbuf[24];
-                snprintf(fbuf, sizeof(fbuf), "%lu fps  avg %lu KB", st.fps, st.avgFrameKB);
+                char fbuf[32];
+                snprintf(fbuf, sizeof(fbuf), "%lu fps  %.0fC  avg %luKB", st.fps, temperatureRead(), st.avgFrameKB);
                 spFeed.setTextColor(C_ACCENT2, TFT_BLACK);
                 spFeed.drawString(fbuf, 4, FEED_H-14);
                 bool blink = ((millis()/300)&1);

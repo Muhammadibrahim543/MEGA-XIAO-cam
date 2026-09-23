@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Walkie-Talkie Digital Twin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg: #09090b;
+            --surface: #18181b;
+            --surface-hover: #27272a;
+            --primary: #0ea5e9;
+            --primary-hover: #0284c7;
+            --accent: #38bdf8;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --danger: #ef4444;
+            --success: #22c55e;
+            --tft-bg: #081120;
+            --tft-text: #fff;
+            --tft-accent: #00ffff;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* --- LEFT SIDEBAR (DEVICE MOCKUP) --- */
+        .sidebar {
+            width: 400px;
+            background: #111;
+            border-right: 1px solid #222;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow-y: auto;
+            box-shadow: 5px 0 20px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+
+        .device {
+            background: #684a32;
+            background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><filter id="noiseFilter"><feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/></filter><rect width="100%" height="100%" filter="url(%23noiseFilter)" opacity="0.15"/></svg>');
+            width: 320px;
+            height: 650px;
+            border-radius: 12px;
+            border: 2px solid #4a3320;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.8), inset -5px -5px 15px rgba(0,0,0,0.4), inset 5px 5px 15px rgba(255,255,255,0.1);
+            padding: 30px 15px 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            transform: scale(0.95);
+            margin-top: 20px;
+        }
+        .gps-module {
+            position: absolute; top: -25px; width: 80px; height: 25px;
+            background: #cc7722; border-radius: 5px 5px 0 0;
+            border: 2px solid #884411; border-bottom: none; z-index: -1;
+        }
+        .antenna {
+            position: absolute; top: -150px; right: 120px; width: 8px; height: 150px;
+            background: #222; z-index: -2; border-radius: 4px 4px 0 0;
+        }
+        .led-l, .led-r {
+            position: absolute; top: 15px; width: 14px; height: 14px;
+            background: #333; border-radius: 3px;
+        }
+        .led-l { left: 20px; }
+        .led-r { right: 20px; }
+        .led-active { background: #ffcc00 !important; box-shadow: 0 0 15px #ffaa00, inset 0 0 5px #fff !important; }
+        .led-tx { background: #ff3333 !important; box-shadow: 0 0 15px #ff0000, inset 0 0 5px #fff !important; }
+        
+        .tft-bezel {
+            background: #000; padding: 5px; border-radius: 8px; margin-top: 15px;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,1), 0 2px 5px rgba(255,255,255,0.1);
+            border: 1px solid #222;
+        }
+        .tft-screen {
+            width: 240px; height: 280px; background: var(--tft-bg); position: relative;
+            font-family: 'Share Tech Mono', monospace; color: var(--tft-text);
+            overflow: hidden; display: flex; flex-direction: column;
+        }
+        .tft-header { height: 26px; background: #002244; display: flex; justify-content: space-between; align-items: center; padding: 0 5px; font-size: 12px; border-bottom: 2px solid var(--tft-accent); font-weight: bold;}
+        .tft-body { flex: 1; padding: 10px; position: relative; display: flex; flex-direction: column; overflow:hidden;}
+        .tft-footer { height: 20px; background: #002244; display: flex; justify-content: space-between; align-items: center; padding: 0 5px; font-size: 11px; color: var(--tft-accent); border-top: 1px solid #004466; font-weight: bold;}
+        
+        .controls-area { position: relative; width: 100%; height: 180px; margin-top: 30px; }
+        .btn { position: absolute; background: #222; border: 2px solid #111; border-radius: 5px; width: 26px; height: 26px; cursor: pointer; box-shadow: 2px 2px 5px rgba(0,0,0,0.5), inset 1px 1px 3px rgba(255,255,255,0.1); }
+        .btn:active { box-shadow: inset 2px 2px 5px rgba(0,0,0,0.8); }
+        .btn-up { top: 10px; left: 55px; } .btn-dn { top: 80px; left: 55px; } .btn-l  { top: 45px; left: 20px; } .btn-r  { top: 45px; left: 90px; }
+        .btn-ex1 { top: 10px; right: 50px; } .btn-ex2 { top: 45px; right: 50px; } .btn-ex3 { top: 80px; right: 50px; } .btn-sel { top: 115px; right: 50px; }
+
+        .logo-area { position: absolute; bottom: 20px; width: 100%; text-align: center; pointer-events: none; }
+        .logo-area svg { width: 80px; fill: none; stroke: #fff; stroke-width: 4; opacity: 0.9; }
+
+        /* --- MAIN DASHBOARD AREA --- */
+        .main-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg);
+        }
+
+        .top-bar {
+            background: var(--surface);
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #333;
+        }
+
+        .brand h1 { font-weight: 800; font-size: 20px; letter-spacing: 1px; display: flex; align-items: center; gap: 10px;}
+        .brand i { color: var(--primary); }
+
+        .connection-panel { display: flex; gap: 10px; align-items: center; }
+        select { background: #000; color: #fff; border: 1px solid #444; padding: 8px 15px; border-radius: 5px; outline: none; font-family: inherit; }
+        button { background: var(--primary); color: white; border: none; padding: 8px 20px; border-radius: 5px; font-weight: 600; cursor: pointer; transition: 0.2s; font-family: inherit; display:flex; align-items:center; gap:8px;}
+        button:hover { background: var(--primary-hover); }
+        button.btn-danger { background: var(--danger); }
+        button.btn-danger:hover { background: #b91c1c; }
+        .status-badge { padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; background: #333; color: var(--text-muted); display:flex; align-items:center; gap:5px;}
+        .status-badge.connected { background: rgba(34, 197, 94, 0.2); color: var(--success); }
+        .status-badge.disconnected { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+
+        .tabs {
+            display: flex;
+            background: var(--surface);
+            padding: 0 30px;
+            border-bottom: 1px solid #333;
+        }
+        .tab {
+            padding: 15px 25px;
+            cursor: pointer;
+            color: var(--text-muted);
+            font-weight: 600;
+            border-bottom: 2px solid transparent;
+            transition: 0.2s;
+            display:flex;
+            align-items:center;
+            gap: 8px;
+        }
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+        .content-area {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+            position: relative;
+        }
+        
+        .view-panel { display: none; height: 100%; flex-direction: column; }
+        .view-panel.active { display: flex; }
+
+        /* --- DASHBOARD WIDGETS --- */
+        .widget-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .widget {
+            background: var(--surface);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid #333;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .widget h3 { color: var(--text-muted); font-size: 14px; text-transform: uppercase; margin-bottom: 15px; display:flex; align-items:center; gap:8px;}
+        
+        .metric { font-size: 32px; font-weight: 800; color: var(--text); }
+        .metric span { font-size: 14px; font-weight: 400; color: var(--text-muted); margin-left: 5px; }
+
+        pre.raw-json { background: #000; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 12px; color: #a5b4fc; overflow-x: auto; height: 300px; }
+
+        /* --- FILE MANAGER --- */
+        .file-manager { background: var(--surface); border-radius: 12px; border: 1px solid #333; overflow: hidden; display: flex; flex-direction: column; flex: 1;}
+        .fm-toolbar { padding: 15px; background: #222; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        .fm-path { font-family: monospace; font-size: 16px; color: var(--primary); background: #000; padding: 5px 15px; border-radius: 5px; flex:1; margin: 0 15px;}
+        
+        .file-table { width: 100%; border-collapse: collapse; text-align: left; }
+        .file-table th { padding: 12px 15px; background: #111; color: var(--text-muted); font-size: 12px; text-transform: uppercase; border-bottom: 1px solid #333;}
+        .file-table td { padding: 12px 15px; border-bottom: 1px solid #222; }
+        .file-table tr:hover td { background: var(--surface-hover); }
+        .file-icon { color: var(--primary); margin-right: 10px; width: 20px; text-align: center;}
+        .file-name { font-weight: 600; cursor: pointer; }
+        .file-name:hover { text-decoration: underline; color: var(--primary); }
+        
+        .action-btn { background: transparent; color: var(--text); border: 1px solid #444; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+        .action-btn:hover { background: var(--primary); border-color: var(--primary); }
+
+        .loading-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.7); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 50; backdrop-filter: blur(2px); display: none;}
+        .spinner { border: 4px solid rgba(255,255,255,0.1); border-left-color: var(--primary); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 15px;}
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        /* Embedded TFT Styles (from old template) */
+        .menu-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px;}
+        .menu-icon { background: #113355; border: 2px solid #225588; border-radius: 8px; height: 60px; display: flex; flex-direction: column; justify-content: center; align-items: center; font-size: 10px; color: #ccc;}
+        .menu-icon.active { border-color: var(--tft-accent); background: #225588; color: #fff; box-shadow: 0 0 10px rgba(0,255,255,0.5); transform: scale(1.05);}
+        .menu-icon i { font-size: 20px; margin-bottom: 5px; color: var(--tft-yellow);}
+        .lr-box { border: 2px solid #444; border-radius: 5px; padding: 10px; text-align: center; margin-bottom: 15px; background: #0a0a0a;}
+        .lr-chan { font-size: 16px; color: #aaa; margin-bottom: 5px;}
+        .lr-freq { font-size: 32px; font-weight: bold; color: var(--tft-green); text-shadow: 0 0 5px #0f0;}
+        .lr-status-box { background: #222; padding: 5px; text-align: center; border-radius: 3px; font-size: 12px;}
+        .lr-tx { color: var(--tft-red); font-weight: bold; font-size: 24px; animation: blink 1s infinite; margin-top:10px; text-align: center;}
+        .set-list { font-size: 14px; }
+        .set-row { display: flex; justify-content: space-between; margin-bottom: 8px; padding: 4px; border-bottom: 1px solid #333;}
+        .set-val { color: var(--tft-accent); font-weight: bold;}
+        .clock-time { font-size: 48px; font-weight: bold; color: var(--tft-accent); text-align: center; margin-top: 60px; text-shadow: 0 0 10px rgba(0,255,255,0.5);}
+        .clock-date { font-size: 16px; color: #aaa; text-align: center; margin-top: 10px;}
+        @keyframes blink { 50% { opacity: 0; } }
+
+    </style>
+</head>
+<body>
+
+<!-- LEFT SIDEBAR: DEVICE MOCKUP -->
+<div class="sidebar">
+    <div style="width: 100%; text-align: center; margin-bottom: 20px;">
+        <h2 style="color: var(--text-muted); font-size: 14px; letter-spacing: 2px;">VIRTUAL HARDWARE</h2>
+    </div>
+    
+    <div class="device">
+        <div class="gps-module"></div>
+        <div class="antenna"></div>
+        <div class="led-l" id="led-l"></div>
+        <div class="led-r" id="led-r"></div>
+        
+        <div class="tft-bezel">
+            <div class="tft-screen" id="tft-screen">
+                <div class="tft-header">
+                    <span id="hdr-title">ESP32 OS</span>
+                    <span id="hdr-batt">0.0V</span>
+                </div>
+                <div class="tft-body" id="tft-body">Waiting for connection...</div>
+                <div class="tft-footer">
+                    <span id="ftr-l">PREV</span>
+                    <span id="ftr-m">SEL</span>
+                    <span id="ftr-r">NEXT</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls-area">
+            <div class="btn btn-up" onmousedown="sendBtn(0,1)" onmouseup="sendBtn(0,0)" onmouseleave="sendBtn(0,0)" ontouchstart="sendBtn(0,1)" ontouchend="sendBtn(0,0)" title="UP"></div>
+            <div class="btn btn-dn" onmousedown="sendBtn(1,1)" onmouseup="sendBtn(1,0)" onmouseleave="sendBtn(1,0)" ontouchstart="sendBtn(1,1)" ontouchend="sendBtn(1,0)" title="DOWN"></div>
+            <div class="btn btn-l" onmousedown="sendBtn(2,1)" onmouseup="sendBtn(2,0)" onmouseleave="sendBtn(2,0)" ontouchstart="sendBtn(2,1)" ontouchend="sendBtn(2,0)" title="LEFT/PREV"></div>
+            <div class="btn btn-r" onmousedown="sendBtn(3,1)" onmouseup="sendBtn(3,0)" onmouseleave="sendBtn(3,0)" ontouchstart="sendBtn(3,1)" ontouchend="sendBtn(3,0)" title="RIGHT/NEXT"></div>
+            
+            <div class="btn btn-ex1" onmousedown="sendBtn(4,1)" onmouseup="sendBtn(4,0)" onmouseleave="sendBtn(4,0)" ontouchstart="sendBtn(4,1)" ontouchend="sendBtn(4,0)" title="SELECT/OK"></div>
+            <div class="btn btn-ex2" onmousedown="sendBtn(6,1)" onmouseup="sendBtn(6,0)" onmouseleave="sendBtn(6,0)" ontouchstart="sendBtn(6,1)" ontouchend="sendBtn(6,0)" title="EXTRA 2"></div>
+            <div class="btn btn-ex3" onmousedown="sendBtn(7,1)" onmouseup="sendBtn(7,0)" onmouseleave="sendBtn(7,0)" ontouchstart="sendBtn(7,1)" ontouchend="sendBtn(7,0)" title="EXTRA 3"></div>
+            <div class="btn btn-sel" onmousedown="sendBtn(5,1)" onmouseup="sendBtn(5,0)" onmouseleave="sendBtn(5,0)" ontouchstart="sendBtn(5,1)" ontouchend="sendBtn(5,0)" title="EXTRA 1 (BACK)"></div>
+        </div>
+
+        <div class="logo-area">
+            <svg viewBox="0 0 100 100">
+                <path d="M 50 90 C 20 60 10 40 10 30 C 10 15 25 10 35 15 C 45 20 50 30 50 30 C 50 30 55 20 65 15 C 75 10 90 15 90 30 C 90 40 80 60 50 90" stroke-width="4"/>
+                <path d="M 40 40 L 45 30 L 60 35 L 65 25 L 75 40 C 75 60 60 70 50 70 C 40 70 35 55 40 40" stroke-width="3"/>
+            </svg>
+        </div>
+    </div>
+</div>
+
+<!-- MAIN DASHBOARD AREA -->
+<div class="main-area">
+    <div class="top-bar">
+        <div class="brand">
+            <i class="fas fa-satellite-dish fa-lg"></i>
+            <h1>COMMAND CENTER</h1>
+        </div>
+        <div class="connection-panel">
+            <select id="port-select">
+                <option value="">Select COM Port...</option>
+                {% for p in ports %}
+                <option value="{{ p }}">{{ p }}</option>
+                {% endfor %}
+            </select>
+            <button onclick="connect()"><i class="fas fa-plug"></i> Connect</button>
+            <button class="btn-danger" onclick="disconnect()"><i class="fas fa-power-off"></i></button>
+            <div id="status-badge" class="status-badge disconnected">
+                <i class="fas fa-circle"></i> OFFLINE
+            </div>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('telemetry')"><i class="fas fa-chart-line"></i> Live Telemetry</div>
+        <div class="tab" onclick="switchTab('files')"><i class="fas fa-folder-open"></i> File Manager</div>
+        <div class="tab" onclick="switchTab('raw')"><i class="fas fa-code"></i> Raw Data</div>
+    </div>
+
+    <div class="content-area">
+        
+        <!-- View 1: Telemetry -->
+        <div id="view-telemetry" class="view-panel active">
+            <div class="widget-grid">
+                <!-- System Widget -->
+                <div class="widget">
+                    <h3><i class="fas fa-microchip"></i> System Status</h3>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top: 10px;">
+                        <div>
+                            <div style="color:var(--text-muted); font-size:12px;">BATTERY</div>
+                            <div class="metric" id="dash-batt">0.0<span>V</span></div>
+                        </div>
+                        <div>
+                            <div style="color:var(--text-muted); font-size:12px;">APP MODE</div>
+                            <div class="metric" style="font-size: 24px; color: var(--primary);" id="dash-mode">UNKNOWN</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GPS Widget -->
+                <div class="widget">
+                    <h3><i class="fas fa-location-arrow"></i> GPS Navigation</h3>
+                    <div style="display:flex; justify-content:space-between; margin-top: 10px;">
+                        <div>
+                            <div style="color:var(--text-muted); font-size:12px;">LATITUDE</div>
+                            <div style="font-size: 18px; font-weight: 600; font-family: monospace;" id="dash-lat">0.000000</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--text-muted); font-size:12px;">LONGITUDE</div>
+                            <div style="font-size: 18px; font-weight: 600; font-family: monospace;" id="dash-lon">0.000000</div>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; margin-top: 15px;">
+                        <div>
+                            <div style="color:var(--text-muted); font-size:12px;">SPEED</div>
+                            <div style="font-size: 18px; font-weight: 600;" id="dash-speed">0.0 <span>km/h</span></div>
+                        </div>
+                        <div>
+                            <div style="color:var(--text-muted); font-size:12px;">SATS</div>
+                            <div style="font-size: 18px; font-weight: 600;" id="dash-sats">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- IMU Widget -->
+                <div class="widget">
+                    <h3><i class="fas fa-cube"></i> Orientation (IMU)</h3>
+                    <div style="display:flex; justify-content:space-around; align-items:center; margin-top: 15px;">
+                        <div style="text-align:center;">
+                            <div style="color:var(--text-muted); font-size:12px;">PITCH</div>
+                            <div style="font-size: 20px; font-weight: bold; color: var(--success);" id="dash-pitch">0°</div>
+                        </div>
+                        <div style="text-align:center;">
+                            <div style="color:var(--text-muted); font-size:12px;">ROLL</div>
+                            <div style="font-size: 20px; font-weight: bold; color: var(--primary);" id="dash-roll">0°</div>
+                        </div>
+                        <div style="text-align:center;">
+                            <div style="color:var(--text-muted); font-size:12px;">YAW</div>
+                            <div style="font-size: 20px; font-weight: bold; color: var(--accent);" id="dash-yaw">0°</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- View 2: File Manager -->
+        <div id="view-files" class="view-panel">
+            <div class="file-manager">
+                <div class="fm-toolbar">
+                    <button onclick="navigateUp()"><i class="fas fa-arrow-up"></i> Up</button>
+                    <div class="fm-path" id="fm-current-path">/</div>
+                    <button onclick="refreshDir()"><i class="fas fa-sync-alt"></i> Refresh</button>
+                </div>
+                <div style="flex:1; overflow-y:auto;">
+                    <table class="file-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Size</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="file-list">
+                            <tr><td colspan="3" style="text-align:center; padding: 20px; color: var(--text-muted);">Connect to load files...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- View 3: Raw JSON -->
+        <div id="view-raw" class="view-panel">
+            <h2 style="margin-bottom:15px; font-size:16px;">Live State Dump</h2>
+            <pre class="raw-json" id="raw-json">{}</pre>
+        </div>
+        
+        <!-- Loading overlay -->
+        <div class="loading-overlay" id="loading-overlay">
+            <div class="spinner"></div>
+            <div id="loading-text" style="font-weight:600; letter-spacing:1px;">LOADING...</div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    // ----- GLOBAL STATE & CONSTANTS -----
+    let evtSource = null;
+    let isConnected = false;
+    let currentPath = "/";
+
+    const APP_MODE_NAMES = {
+        0: "ESP32 CLOCK", 2: "COMPASS", 3: "AHT20 TH",
+        13: "MAIN MENU", 14: "GPS MODE", 16: "WALKIE TALKIE",
+        17: "LIVE VIDEO", 26: "MAP VIEWER", 29: "USB MIC"
+    };
+    
+    const MENU_NAMES = [
+        "GPS", "IMU", "HEALTH", "COMPASS", "BMP280", "SD CARD", "TH SENSOR", "THERMAL", 
+        "AUDIO", "USB OTG", "ANALYZER", "AIR MOUSE", "ESPNOW", "USB MIC", "WALKIE", 
+        "UTILITY", "LIVE RADIO", "LIVE VIDEO", "MAP", "NAVIGATION", "NET RADIO", 
+        "GAMES", "E-BOOK", "WIFI", "WARDRIVE", "GCS"
+    ];
+    const MENU_ICONS = [
+        "fa-location-dot", "fa-cube", "fa-heartbeat", "fa-compass", "fa-cloud", "fa-sd-card", "fa-temperature-half", "fa-fire",
+        "fa-microphone", "fa-usb", "fa-chart-pie", "fa-mouse", "fa-wifi", "fa-microphone-lines", "fa-walkie-talkie",
+        "fa-calculator", "fa-broadcast-tower", "fa-video", "fa-map", "fa-route", "fa-globe",
+        "fa-gamepad", "fa-book", "fa-signal", "fa-shield-halved", "fa-satellite-dish"
+    ];
+    const CHANNELS = ["433.000", "433.250", "433.500", "434.000"];
+
+    // ----- UI NAVIGATION -----
+    function switchTab(viewId) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        event.currentTarget.classList.add('active');
+        
+        document.querySelectorAll('.view-panel').forEach(v => v.classList.remove('active'));
+        document.getElementById('view-' + viewId).classList.add('active');
+        
+        if (viewId === 'files' && isConnected) refreshDir();
+    }
+
+    function showLoading(text) {
+        document.getElementById('loading-text').innerText = text;
+        document.getElementById('loading-overlay').style.display = 'flex';
+    }
+    
+    function hideLoading() {
+        document.getElementById('loading-overlay').style.display = 'none';
+    }
+
+    // ----- DEVICE CONTROL -----
+    function sendCmd(cmd, val) {
+        fetch('/cmd', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cmd: cmd, val: val}) });
+    }
+
+    function sendBtn(id, state) {
+        fetch('/cmd', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cmd: "BTN_STATE", val: id, state: state}) });
+    }
+
+    // ----- CONNECTION MANAGEMENT -----
+    function connect() {
+        const port = document.getElementById('port-select').value;
+        if (!port) return alert("Please select a COM Port from the dropdown first!");
+        
+        fetch('/connect', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({port: port}) })
+        .then(r => r.json())
+        .then(res => {
+            if (res.success) {
+                isConnected = true;
+                const badge = document.getElementById('status-badge');
+                badge.className = 'status-badge connected';
+                badge.innerHTML = '<i class="fas fa-circle"></i> ONLINE';
+                startStream();
+            } else {
+                alert("Could not connect to " + port + "\nError: " + res.error);
+            }
+        });
+    }
+
+    function disconnect() {
+        fetch('/disconnect', { method: 'POST' });
+        if (evtSource) { evtSource.close(); evtSource = null; }
+        isConnected = false;
+        const badge = document.getElementById('status-badge');
+        badge.className = 'status-badge disconnected';
+        badge.innerHTML = '<i class="fas fa-circle"></i> OFFLINE';
+    }
+
+    function startStream() {
+        if (evtSource) evtSource.close();
+        evtSource = new EventSource('/stream');
+        evtSource.onmessage = function(e) {
+            try {
+                const state = JSON.parse(e.data);
+                if (state.connected === false) disconnect();
+                else updateUI(state);
+            } catch (err) {}
+        };
+    }
+
+    // ----- FILE MANAGER -----
+    function navigateUp() {
+        if (currentPath === "/") return;
+        let parts = currentPath.split("/").filter(p => p);
+        parts.pop();
+        currentPath = "/" + parts.join("/");
+        if (currentPath !== "/") currentPath += "/";
+        refreshDir();
+    }
+
+    function refreshDir() {
+        if (!isConnected) return alert("Connect to device first!");
+        showLoading("READING DIRECTORY...");
+        
+        fetch('/api/fs/ls', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({path: currentPath})
+        })
+        .then(r => r.json())
+        .then(res => {
+            hideLoading();
+            if (res.error) return alert("Error: " + res.error);
+            
+            currentPath = res.path;
+            if (!currentPath.endsWith('/')) currentPath += '/';
+            document.getElementById('fm-current-path').innerText = currentPath;
+            
+            let html = "";
+            res.files.sort((a,b) => b.isDir - a.isDir || a.name.localeCompare(b.name)).forEach(f => {
+                let icon = f.isDir ? 'fa-folder' : 'fa-file-alt';
+                let size = f.isDir ? '-' : (f.size / 1024).toFixed(1) + ' KB';
+                let action = f.isDir 
+                    ? `<button class="action-btn" onclick="openDir('${f.name}')">Open</button>`
+                    : `<button class="action-btn" onclick="downloadFile('${f.name}')"><i class="fas fa-download"></i></button>`;
+                
+                html += `
+                    <tr>
+                        <td>
+                            <i class="fas ${icon} file-icon"></i>
+                            <span class="file-name" onclick="${f.isDir ? `openDir('${f.name}')` : ''}">${f.name}</span>
+                        </td>
+                        <td>${size}</td>
+                        <td>${action}</td>
+                    </tr>
+                `;
+            });
+            if (res.files.length === 0) html = '<tr><td colspan="3" style="text-align:center;">Directory is empty</td></tr>';
+            document.getElementById('file-list').innerHTML = html;
+        })
+        .catch(e => { hideLoading(); alert("Request failed"); });
+    }
+
+    function openDir(name) {
+        currentPath += name;
+        refreshDir();
+    }
+
+    function downloadFile(name) {
+        let fullPath = currentPath + name;
+        window.open('/api/fs/download?path=' + encodeURIComponent(fullPath), '_blank');
+    }
+
+    // ----- UI UPDATER -----
+    function updateUI(state) {
+        // Raw Dump
+        document.getElementById('raw-json').innerText = JSON.stringify(state, null, 2);
+        
+        // Update Widgets
+        document.getElementById('dash-batt').innerHTML = (state.vBatt || 0.0).toFixed(1) + "<span>V</span>";
+        document.getElementById('dash-mode').innerText = APP_MODE_NAMES[state.appMode] || ("MODE " + state.appMode);
+        
+        if (state.gpsLat !== undefined) {
+            document.getElementById('dash-lat').innerText = state.gpsLat.toFixed(6);
+            document.getElementById('dash-lon').innerText = state.gpsLon.toFixed(6);
+            document.getElementById('dash-speed').innerHTML = (state.gpsSpeed || 0).toFixed(1) + " <span>km/h</span>";
+            document.getElementById('dash-sats').innerText = state.gpsSats || 0;
+        }
+
+        if (state.imuPitch !== undefined) {
+            document.getElementById('dash-pitch').innerText = Math.round(state.imuPitch) + "°";
+            document.getElementById('dash-roll').innerText = Math.round(state.imuRoll) + "°";
+            document.getElementById('dash-yaw').innerText = Math.round(state.imuYaw) + "°";
+        }
+
+        // Update Virtual Device TFT
+        updateVirtualTFT(state);
+    }
+
+    function updateVirtualTFT(state) {
+        let appMode = state.appMode;
+        document.getElementById('hdr-batt').innerText = (state.vBatt || 0.0).toFixed(1) + "V";
+        const body = document.getElementById('tft-body');
+        
+        // Blinking LEDs based on state
+        if (appMode === 16 && state.lrPttHeld) {
+            document.getElementById('led-r').className = "led-r led-tx";
+        } else {
+            document.getElementById('led-r').className = "led-r";
+        }
+
+        if (state.navState === 0) { // CLOCK
+            document.getElementById('hdr-title').innerText = "ESP32 CLOCK";
+            document.getElementById('ftr-l').innerText = "";
+            document.getElementById('ftr-m').innerText = "MENU";
+            document.getElementById('ftr-r').innerText = "";
+            let d = new Date();
+            body.innerHTML = `<div class="clock-time">${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}</div><div class="clock-date">SYSTEM READY</div>`;
+        } 
+        else if (state.navState === 1) { // MAIN MENU
+            document.getElementById('hdr-title').innerText = "MAIN MENU";
+            document.getElementById('ftr-l').innerText = "PREV";
+            document.getElementById('ftr-m').innerText = "ENTER";
+            document.getElementById('ftr-r').innerText = "NEXT";
+            
+            let html = '<div class="menu-grid">';
+            let sel = state.menuSel || 0;
+            let startIdx = Math.max(0, sel - 4);
+            if (startIdx > MENU_NAMES.length - 9) startIdx = Math.max(0, MENU_NAMES.length - 9);
+            
+            for(let i=0; i<9; i++) {
+                let idx = startIdx + i;
+                if (idx < MENU_NAMES.length) {
+                    let active = (idx === sel) ? "active" : "";
+                    html += `<div class="menu-icon ${active}"><i class="fas ${MENU_ICONS[idx]}"></i><span>${MENU_NAMES[idx]}</span></div>`;
+                }
+            }
+            html += '</div>';
+            body.innerHTML = html;
+        }
+        else if (state.navState === 2) { // MODULE RUNNING
+            if (appMode === 16) { // LIVE RADIO
+                document.getElementById('hdr-title').innerText = "LIVE RADIO";
+                if (state.lrPage === 0) {
+                    document.getElementById('ftr-l').innerText = "PTT";
+                    document.getElementById('ftr-m').innerText = "MENU";
+                    document.getElementById('ftr-r').innerText = "CHAN";
+                    let ch = state.lrChannel || 0;
+                    body.innerHTML = `
+                        <div class="lr-box">
+                            <div class="lr-chan">CHANNEL ${ch + 1}</div>
+                            <div class="lr-freq">${CHANNELS[ch % 4]} MHz</div>
+                        </div>
+                        <div class="lr-status-box">RX: STANDBY &nbsp;&nbsp; SIG: ■■■■</div>
+                        ${state.lrPttHeld ? '<div class="lr-tx">TRANSMITTING...</div>' : ''}
+                    `;
+                } else {
+                    document.getElementById('ftr-l').innerText = "-";
+                    document.getElementById('ftr-m').innerText = "BACK";
+                    document.getElementById('ftr-r').innerText = "+";
+                    body.innerHTML = `
+                        <div style="font-weight:bold; color:var(--tft-yellow); margin-bottom:10px; text-align:center;">RADIO SETTINGS</div>
+                        <div class="set-list">
+                            <div class="set-row"><span>Mic Gain</span> <span class="set-val">${state.lrMicGain || 0}</span></div>
+                            <div class="set-row"><span>Vol Gain</span> <span class="set-val">${state.lrVolGain || 1.0}</span></div>
+                            <div class="set-row"><span>Noise Gate</span> <span class="set-val">${state.lrNoiseGate || 0}</span></div>
+                            <div class="set-row"><span>Squelch</span> <span class="set-val">${state.lrSquelch || 0}</span></div>
+                        </div>
+                    `;
+                }
+            } else if (appMode === 13) { // USB MIC
+                document.getElementById('hdr-title').innerText = "USB MIC";
+                document.getElementById('ftr-l').innerText = "-";
+                document.getElementById('ftr-m').innerText = "MENU";
+                document.getElementById('ftr-r').innerText = "+";
+                
+                let db = state.mic_db || -60;
+                let pct = Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+                
+                let spectrumHtml = `<div style="display:flex; align-items:flex-end; justify-content:space-between; height: 100px; width: 100%; margin-top: 10px; border-bottom: 1px solid #333;">`;
+                let bands = state.mic_spectrum || Array(48).fill(0);
+                for(let i=0; i<48; i++) {
+                    let h = Math.max(2, Math.min(100, bands[i] * 1500));
+                    let color = h > 80 ? '#ef4444' : (h > 50 ? '#eab308' : '#22c55e');
+                    spectrumHtml += `<div style="width: 3px; height: ${h}%; background: ${color}; border-radius: 2px 2px 0 0; transition: height 0.05s ease-out;"></div>`;
+                }
+                spectrumHtml += `</div>`;
+                
+                body.innerHTML = `
+                    <div style="text-align:center; font-size: 12px; color: #888; margin-top: 5px;">LIVE AUDIO STREAM</div>
+                    ${spectrumHtml}
+                    <div style="margin-top: 20px; font-size: 12px; color: #fff;">Volume: ${db.toFixed(1)} dB</div>
+                    <div style="height: 10px; width: 100%; background: #222; border-radius: 5px; margin-top: 5px;">
+                        <div style="height: 100%; width: ${pct}%; background: ${pct > 80 ? '#f00' : '#0f0'}; border-radius: 5px; transition: width 0.1s;"></div>
+                    </div>
+                `;
+            } else if (appMode === 0) { // GPS
+                document.getElementById('hdr-title').innerText = "GPS NAVIGATOR";
+                document.getElementById('ftr-l').innerText = "-";
+                document.getElementById('ftr-m').innerText = "MENU";
+                document.getElementById('ftr-r').innerText = "+";
+                body.innerHTML = `
+                    <div style="font-family: monospace; font-size: 14px; color: var(--tft-accent); padding-top: 10px;">
+                        <div>LAT: ${(state.gpsLat || 0).toFixed(5)}</div>
+                        <div>LON: ${(state.gpsLon || 0).toFixed(5)}</div>
+                        <div style="margin-top:15px; font-size:18px; font-weight:bold; color:var(--tft-green);">SPD: ${(state.gpsSpeed || 0).toFixed(1)} km/h</div>
+                        <div style="margin-top:10px;">ALT: ${(state.gpsAlt || 0).toFixed(1)} m</div>
+                        <div style="margin-top:20px; text-align:center; font-size:12px; color:#888;">SATS: ${state.gpsSats || 0}</div>
+                    </div>
+                `;
+            } else if (appMode === 1) { // IMU
+                document.getElementById('hdr-title').innerText = "IMU SENSOR";
+                document.getElementById('ftr-l').innerText = "CAL";
+                document.getElementById('ftr-m').innerText = "MENU";
+                document.getElementById('ftr-r').innerText = "ZERO";
+                body.innerHTML = `
+                    <div style="text-align: center; margin-top: 10px;">
+                        <div style="font-size:12px; color:#888;">PITCH</div>
+                        <div style="font-size:24px; color:#0f0; font-weight:bold;">${Math.round(state.imuPitch || 0)}°</div>
+                        <div style="font-size:12px; color:#888; margin-top:10px;">ROLL</div>
+                        <div style="font-size:24px; color:#0cf; font-weight:bold;">${Math.round(state.imuRoll || 0)}°</div>
+                        <div style="font-size:12px; color:#888; margin-top:10px;">YAW</div>
+                        <div style="font-size:24px; color:#f0f; font-weight:bold;">${Math.round(state.imuYaw || 0)}°</div>
+                    </div>
+                `;
+            } else {
+                let title = MENU_NAMES[appMode] || "MODULE";
+                document.getElementById('hdr-title').innerText = title;
+                document.getElementById('ftr-l').innerText = "PREV";
+                document.getElementById('ftr-m').innerText = "SEL";
+                document.getElementById('ftr-r').innerText = "NEXT";
+                body.innerHTML = `
+                    <div style="background: #000; color: #0f0; border: 1px solid #333; height: 100%; padding: 5px; font-family: monospace; overflow: hidden; position: relative;">
+                        <div>> INIT ${title}</div>
+                        <div>> SYSTEM CHECK... OK</div>
+                        <div>> SENSORS... READY</div>
+                        <div style="margin-top: 20px;">[ ${title} MODULE ACTIVE ]</div>
+                        <div style="position: absolute; bottom: 5px; left: 5px;">MODE ID: ${appMode}<span style="animation: blink 1s infinite;">_</span></div>
+                    </div>
+                `;
+            }
+        }
+    }
+</script>
+</body>
+</html>

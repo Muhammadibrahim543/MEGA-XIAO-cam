@@ -1,0 +1,2366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-S3 Dual Hardware Command Hub &bull; Vision + Tracker</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=Share+Tech+Mono&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg: #080a0f;
+            --surface: #10141d;
+            --surface-card: #151a26;
+            --surface-hover: #1c2333;
+            --border: #222b3d;
+            --border-glow: rgba(0, 212, 255, 0.3);
+            
+            --primary: #00d4ff;
+            --primary-hover: #00b0d9;
+            --accent-purple: #9d4edd;
+            --accent-green: #00e676;
+            --accent-red: #ff3d71;
+            --accent-yellow: #ffb703;
+            
+            --text-main: #f0f4fc;
+            --text-muted: #8e9bb0;
+            --text-dim: #5c687e;
+
+            --tft-bg: #081120;
+            --tft-accent: #00ffff;
+            --tft-text: #ffffff;
+
+            --cam-body: #1c212d;
+            --cam-body-border: #2a3244;
+            --cam-screen-w: 172px;
+            --cam-screen-h: 320px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text-main);
+            font-family: 'Inter', -apple-system, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* ─── TOP HEADER: DUAL PORT COMMAND BAR ─────────────────────────── */
+        header {
+            background: rgba(16, 20, 29, 0.95);
+            border-bottom: 1px solid var(--border);
+            padding: 10px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 100;
+            gap: 16px;
+            flex-shrink: 0;
+            backdrop-filter: blur(8px);
+        }
+
+        .brand-area {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .brand-icon {
+            width: 36px;
+            height: 36px;
+            background: linear-gradient(135deg, var(--primary), var(--accent-purple));
+            border-radius: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 17px;
+            color: #fff;
+            box-shadow: 0 0 14px rgba(0, 212, 255, 0.4);
+        }
+        .brand-title {
+            font-size: 16px;
+            font-weight: 800;
+            letter-spacing: -0.3px;
+            background: linear-gradient(90deg, #ffffff, var(--primary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .brand-sub {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: 'Share Tech Mono', monospace;
+        }
+
+        /* Dual Connection Boxes */
+        .dual-connections {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+
+        .conn-box {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(21, 26, 38, 0.85);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 5px 12px;
+            transition: all 0.2s;
+        }
+        .conn-box:hover {
+            border-color: var(--border-glow);
+        }
+
+        .conn-tag {
+            font-size: 11px;
+            font-weight: 700;
+            font-family: 'Share Tech Mono', monospace;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            letter-spacing: 0.5px;
+        }
+        .conn-tag.cam { color: var(--primary); }
+        .conn-tag.main { color: var(--accent-purple); }
+
+        select.port-sel {
+            background: #0a0d14;
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            padding: 5px 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            outline: none;
+        }
+        select.port-sel:focus {
+            border-color: var(--primary);
+        }
+
+        .btn-head {
+            background: var(--surface-card);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 5px 12px;
+            border-radius: 5px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s;
+        }
+        .btn-head:hover { transform: translateY(-1px); }
+        .btn-head-cam {
+            background: linear-gradient(135deg, #00b0ff, #0081cb);
+            border-color: #00d4ff;
+            color: white;
+            box-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
+        }
+        .btn-head-main {
+            background: linear-gradient(135deg, #7c4dff, #651fff);
+            border-color: #9d4edd;
+            color: white;
+            box-shadow: 0 0 10px rgba(157, 78, 221, 0.3);
+        }
+        .btn-head-disconn {
+            background: rgba(255, 61, 113, 0.2);
+            border-color: var(--accent-red);
+            color: var(--accent-red);
+            padding: 5px 8px;
+        }
+        .btn-head-disconn:hover {
+            background: var(--accent-red);
+            color: white;
+        }
+
+        .badge-status {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            font-family: 'Share Tech Mono', monospace;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .badge-status.offline {
+            background: rgba(255, 61, 113, 0.15);
+            color: var(--accent-red);
+            border: 1px solid rgba(255, 61, 113, 0.3);
+        }
+        .badge-status.online {
+            background: rgba(0, 230, 118, 0.15);
+            color: var(--accent-green);
+            border: 1px solid rgba(0, 230, 118, 0.4);
+            box-shadow: 0 0 8px rgba(0, 230, 118, 0.25);
+        }
+
+        /* ─── MAIN WORKSPACE GRID ───────────────────────────────────────── */
+        .workspace {
+            flex: 1;
+            display: flex;
+            height: calc(100vh - 60px);
+            overflow: hidden;
+            background: var(--bg);
+        }
+
+        /* ─── COLUMN 1: DEVICE 1 (WALKIE-TALKIE DIGITAL TWIN) ───────────── */
+        .side-twin-1 {
+            width: 360px;
+            min-width: 360px;
+            background: #0d1017;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 16px 12px;
+            overflow-y: auto;
+            position: relative;
+        }
+        .side-twin-1::-webkit-scrollbar { width: 5px; }
+        .side-twin-1::-webkit-scrollbar-thumb { background: #222b3d; border-radius: 4px; }
+
+        .device-title-tag {
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 1.5px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* Walkie-Talkie Physical Mockup */
+        .wt-device {
+            background: #684a32;
+            background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><filter id="noiseFilter"><feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/></filter><rect width="100%" height="100%" filter="url(%23noiseFilter)" opacity="0.15"/></svg>');
+            width: 300px;
+            height: 590px;
+            border-radius: 12px;
+            border: 2px solid #4a3320;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.8), inset -4px -4px 12px rgba(0,0,0,0.4), inset 4px 4px 12px rgba(255,255,255,0.1);
+            padding: 24px 12px 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            transform: scale(0.95);
+            margin-top: 15px;
+        }
+        .wt-gps-module {
+            position: absolute; top: -20px; width: 70px; height: 20px;
+            background: #cc7722; border-radius: 5px 5px 0 0;
+            border: 2px solid #884411; border-bottom: none; z-index: -1;
+        }
+        .wt-antenna {
+            position: absolute; top: -130px; right: 100px; width: 8px; height: 130px;
+            background: #222; z-index: -2; border-radius: 4px 4px 0 0;
+        }
+        .wt-led-l, .wt-led-r {
+            position: absolute; top: 12px; width: 12px; height: 12px;
+            background: #333; border-radius: 3px;
+        }
+        .wt-led-l { left: 18px; }
+        .wt-led-r { right: 18px; }
+        .wt-led-active { background: #ffcc00 !important; box-shadow: 0 0 12px #ffaa00, inset 0 0 5px #fff !important; }
+        .wt-led-tx { background: #ff3333 !important; box-shadow: 0 0 12px #ff0000, inset 0 0 5px #fff !important; }
+
+        .wt-bezel {
+            background: #000; padding: 4px; border-radius: 8px; margin-top: 12px;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,1), 0 2px 5px rgba(255,255,255,0.1);
+            border: 1px solid #222;
+        }
+        .wt-screen {
+            width: 230px; height: 260px; background: var(--tft-bg); position: relative;
+            font-family: 'Share Tech Mono', monospace; color: var(--tft-text);
+            overflow: hidden; display: flex; flex-direction: column;
+        }
+        .wt-header { height: 24px; background: #002244; display: flex; justify-content: space-between; align-items: center; padding: 0 6px; font-size: 11px; border-bottom: 2px solid var(--tft-accent); font-weight: bold; }
+        .wt-body { flex: 1; padding: 8px; position: relative; display: flex; flex-direction: column; overflow: hidden; font-size: 12px; }
+        .wt-footer { height: 20px; background: #002244; display: flex; justify-content: space-between; align-items: center; padding: 0 6px; font-size: 10px; color: var(--tft-accent); border-top: 1px solid #004466; font-weight: bold; }
+
+        /* Embedded Walkie-Talkie TFT Screen Styles */
+        .menu-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 6px;}
+        .menu-icon { background: #113355; border: 2px solid #225588; border-radius: 6px; height: 56px; display: flex; flex-direction: column; justify-content: center; align-items: center; font-size: 9px; color: #ccc; text-align: center;}
+        .menu-icon.active { border-color: var(--tft-accent); background: #225588; color: #fff; box-shadow: 0 0 10px rgba(0,255,255,0.5); transform: scale(1.04);}
+        .menu-icon i { font-size: 18px; margin-bottom: 3px; color: var(--tft-yellow);}
+        .lr-box { border: 2px solid #444; border-radius: 5px; padding: 8px; text-align: center; margin-bottom: 10px; background: #0a0a0a;}
+        .lr-chan { font-size: 14px; color: #aaa; margin-bottom: 4px;}
+        .lr-freq { font-size: 26px; font-weight: bold; color: var(--tft-green); text-shadow: 0 0 5px #0f0;}
+        .lr-status-box { background: #222; padding: 4px; text-align: center; border-radius: 3px; font-size: 11px;}
+        .lr-tx { color: var(--tft-red); font-weight: bold; font-size: 20px; animation: blink 1s infinite; margin-top:8px; text-align: center;}
+        .set-list { font-size: 12px; }
+        .set-row { display: flex; justify-content: space-between; margin-bottom: 6px; padding: 3px; border-bottom: 1px solid #333;}
+        .set-val { color: var(--tft-accent); font-weight: bold;}
+        .clock-time { font-size: 42px; font-weight: bold; color: var(--tft-accent); text-align: center; margin-top: 40px; text-shadow: 0 0 10px rgba(0,255,255,0.5);}
+        .clock-date { font-size: 14px; color: #aaa; text-align: center; margin-top: 8px;}
+        @keyframes blink { 50% { opacity: 0; } }
+
+        .wt-controls-area { position: relative; width: 100%; height: 160px; margin-top: 24px; }
+        .wt-btn { position: absolute; background: #222; border: 2px solid #111; border-radius: 5px; width: 26px; height: 26px; cursor: pointer; box-shadow: 2px 2px 5px rgba(0,0,0,0.5), inset 1px 1px 3px rgba(255,255,255,0.1); }
+        .wt-btn:active { box-shadow: inset 2px 2px 5px rgba(0,0,0,0.8); }
+        .wt-btn-up { top: 8px; left: 50px; } .wt-btn-dn { top: 75px; left: 50px; } .wt-btn-l { top: 41px; left: 16px; } .wt-btn-r { top: 41px; left: 84px; }
+        .wt-btn-ex1 { top: 8px; right: 45px; } .wt-btn-ex2 { top: 41px; right: 45px; } .wt-btn-ex3 { top: 75px; right: 45px; } .wt-btn-sel { top: 108px; right: 45px; }
+
+        .wt-logo-area { position: absolute; bottom: 12px; width: 100%; text-align: center; pointer-events: none; }
+        .wt-logo-area svg { width: 65px; fill: none; stroke: #fff; stroke-width: 4; opacity: 0.85; }
+
+        /* ─── COLUMN 2: DEVICE 2 (XIAO CAM VIRTUAL HARDWARE & 172x320 DISPLAY) ─ */
+        .side-twin-2 {
+            width: 350px;
+            min-width: 350px;
+            background: #0b0e15;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 16px 12px;
+            overflow-y: auto;
+            position: relative;
+        }
+        .side-twin-2::-webkit-scrollbar { width: 5px; }
+        .side-twin-2::-webkit-scrollbar-thumb { background: #222b3d; border-radius: 4px; }
+
+        /* XIAO ESP32-S3 Camera Physical Enclosure */
+        .cam-device-case {
+            width: 290px;
+            background: linear-gradient(180deg, #1b202c, #131722);
+            border: 2px solid var(--cam-body-border);
+            border-radius: 20px;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.85), inset 0 2px 4px rgba(255,255,255,0.1), inset 0 -2px 6px rgba(0,0,0,0.6);
+            padding: 18px 14px 14px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            margin-top: 10px;
+        }
+
+        /* Camera Top Feature Header */
+        .cam-case-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+            padding: 0 8px 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+        .cam-badge-label {
+            font-size: 10px;
+            font-weight: 800;
+            color: var(--primary);
+            letter-spacing: 1px;
+            font-family: 'Share Tech Mono', monospace;
+        }
+        .cam-lens-accent {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .cam-lens-circle {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #000;
+            border: 2px solid #00d4ff;
+            box-shadow: 0 0 6px rgba(0, 212, 255, 0.6);
+        }
+        .cam-led-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #333;
+            transition: all 0.2s;
+        }
+        .cam-led-status.on {
+            background: #00e676;
+            box-shadow: 0 0 10px #00e676;
+        }
+        .cam-led-status.rec {
+            background: #ff3d71;
+            box-shadow: 0 0 12px #ff3d71;
+            animation: pulse-rec 0.8s infinite;
+        }
+        @keyframes pulse-rec { 50% { opacity: 0.3; } }
+
+        /* Physical 172 x 320 ST7789 Bezel */
+        .cam-tft-bezel {
+            background: #000;
+            padding: 5px;
+            border-radius: 8px;
+            margin-top: 10px;
+            border: 1px solid #293244;
+            box-shadow: inset 0 3px 12px rgba(0,0,0,0.9), 0 0 12px rgba(0, 212, 255, 0.15);
+        }
+
+        /* Exact 172 x 320 Pixel Display */
+        .cam-tft-screen {
+            width: var(--cam-screen-w);
+            height: var(--cam-screen-h);
+            background: #000;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            border-radius: 3px;
+        }
+
+        /* Top 172 x 172 Viewfinder Area */
+        .cam-vf-area {
+            width: 172px;
+            height: 172px;
+            background: #060910;
+            position: relative;
+            overflow: hidden;
+            border-bottom: 2px solid #2104;
+        }
+        .cam-vf-img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+            display: block;
+            transition: transform 0.2s ease;
+        }
+        .cam-vf-img.fill-mode {
+            object-fit: cover;
+        }
+
+        .cam-vf-hud {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 4px;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 9px;
+            color: #fff;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+        }
+        .cam-vf-hud-top {
+            display: flex;
+            justify-content: space-between;
+        }
+        .cam-vf-hud-bot {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .cam-tag-rec {
+            color: #ff3d71;
+            font-weight: bold;
+            display: none;
+            animation: pulse-rec 0.8s infinite;
+        }
+
+        /* Bottom 172 x 144 UI Menu / Telemetry Area */
+        .cam-tft-menu {
+            width: 172px;
+            height: 144px;
+            background: #0841;
+            color: #fff;
+            font-family: 'Share Tech Mono', monospace;
+            padding: 5px;
+            font-size: 10px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            box-sizing: border-box;
+            line-height: 1.3;
+        }
+        .cam-menu-hdr {
+            background: #1082;
+            padding: 2px 4px;
+            color: #07ff;
+            font-weight: bold;
+            font-size: 10px;
+            border-radius: 2px;
+        }
+        .cam-menu-stats {
+            color: #bdf7;
+            font-size: 9px;
+            margin-top: 3px;
+        }
+        .cam-menu-fps {
+            color: #fc60;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        .cam-menu-rot {
+            color: #00e676;
+            font-size: 9px;
+        }
+
+        /* Tactile Hardware Buttons on the XIAO Cam Enclosure */
+        .cam-btn-panel {
+            width: 100%;
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .cam-dpad-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+        }
+
+        .c-btn {
+            background: #252b3b;
+            border: 2px solid #171b26;
+            color: var(--text-main);
+            border-radius: 8px;
+            padding: 7px 14px;
+            font-size: 11px;
+            font-weight: 700;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.6), inset 0 1px 2px rgba(255,255,255,0.15);
+            transition: all 0.1s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+        }
+        .c-btn:hover {
+            background: #31394e;
+            border-color: var(--primary);
+            color: #fff;
+        }
+        .c-btn:active {
+            transform: translateY(2px);
+            box-shadow: inset 0 2px 5px rgba(0,0,0,0.8);
+        }
+
+        .c-btn-ok {
+            background: linear-gradient(135deg, #00b0ff, #0081cb);
+            border-color: #00d4ff;
+            color: white;
+            font-weight: 800;
+            padding: 8px 18px;
+            box-shadow: 0 0 12px rgba(0, 212, 255, 0.4);
+        }
+        .c-btn-rec {
+            background: rgba(255, 61, 113, 0.15);
+            border-color: var(--accent-red);
+            color: #ff3d71;
+            font-weight: bold;
+        }
+        .c-btn-rec.active {
+            background: var(--accent-red);
+            color: #fff;
+            animation: pulse-rec 1s infinite;
+        }
+
+        .c-btn-action-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            justify-content: center;
+            width: 100%;
+        }
+
+        /* ─── COLUMN 3: LIVE COMMAND CENTER & TUNING TABS ───────────────── */
+        .main-studio-col {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg);
+            overflow: hidden;
+        }
+
+        /* Studio Tabs */
+        .studio-tabs {
+            display: flex;
+            background: var(--surface);
+            padding: 0 20px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+            gap: 6px;
+        }
+        .s-tab {
+            padding: 12px 18px;
+            color: var(--text-muted);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .s-tab:hover { color: var(--text-main); }
+        .s-tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+            background: rgba(0, 212, 255, 0.04);
+        }
+
+        .studio-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 24px;
+        }
+        .studio-content::-webkit-scrollbar { width: 6px; }
+        .studio-content::-webkit-scrollbar-thumb { background: #222b3d; border-radius: 4px; }
+
+        .tab-panel { display: none; }
+        .tab-panel.active { display: flex; flex-direction: column; gap: 20px; }
+
+        /* Cards & Widgets */
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 16px;
+        }
+        .dash-card {
+            background: var(--surface-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+        }
+        .dash-card-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .dash-card-title i { color: var(--primary); }
+
+        /* Sliders and Selects */
+        .tune-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 12px;
+        }
+        .tune-label {
+            color: var(--text-muted);
+            font-weight: 500;
+            width: 120px;
+        }
+        .tune-val {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--primary);
+            width: 45px;
+            text-align: right;
+            font-weight: bold;
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            flex: 1;
+            height: 6px;
+            background: #252e42;
+            border-radius: 3px;
+            outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--primary);
+            cursor: pointer;
+            box-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+            transition: transform 0.1s;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        /* Audio Spectrum */
+        .spectrum-bar-container {
+            display: flex;
+            align-items: flex-end;
+            gap: 3px;
+            height: 70px;
+            background: #090c12;
+            border-radius: 8px;
+            padding: 6px 8px;
+            border: 1px solid #1a2233;
+        }
+        .spec-bar {
+            flex: 1;
+            background: linear-gradient(180deg, #00d4ff, #00e676);
+            border-radius: 2px 2px 0 0;
+            min-height: 2px;
+            height: 2px;
+            transition: height 0.05s ease;
+        }
+        .vu-meter-track {
+            height: 10px;
+            background: #090c12;
+            border-radius: 5px;
+            overflow: hidden;
+            border: 1px solid #1a2233;
+            margin-top: 4px;
+        }
+        .vu-meter-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #00e676 60%, #ffb703 85%, #ff3d71 100%);
+            border-radius: 5px;
+            transition: width 0.05s;
+        }
+
+        /* File Manager */
+        .file-box {
+            background: var(--surface-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+        }
+        .file-toolbar {
+            padding: 10px 14px;
+            background: #0f1420;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            gap: 12px;
+        }
+        .file-path-tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            color: var(--primary);
+            background: #080a0f;
+            padding: 5px 12px;
+            border-radius: 5px;
+            border: 1px solid #1d2538;
+            flex: 1;
+        }
+        .file-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            text-align: left;
+        }
+        .file-table th {
+            padding: 10px 14px;
+            background: #090d14;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border);
+            text-transform: uppercase;
+            font-size: 11px;
+        }
+        .file-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .file-table tr:hover td {
+            background: rgba(0, 212, 255, 0.03);
+        }
+
+        pre.raw-json-box {
+            background: #090c14;
+            padding: 14px;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: #7dd3fc;
+            overflow: auto;
+            max-height: 480px;
+            border: 1px solid #1d2538;
+        }
+
+        /* Keyboard Hints */
+        .kbd-pill {
+            background: #1e2638;
+            border: 1px solid #2f3c56;
+            color: var(--primary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            font-weight: bold;
+        }
+
+        /* Big Monitor Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.85);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            backdrop-filter: blur(6px);
+        }
+        .modal-body {
+            background: #10141d;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            width: 800px;
+            max-width: 95vw;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.9);
+        }
+        .modal-hdr {
+            padding: 12px 18px;
+            background: #171d2b;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+        }
+        .modal-img {
+            width: 100%;
+            height: auto;
+            max-height: 75vh;
+            object-fit: contain;
+            background: #000;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ─── TOP HEADER: DUAL PORT COMMAND BAR ─────────────────────────── -->
+    <header>
+        <div class="brand-area">
+            <div class="brand-icon">
+                <i class="fas fa-camera"></i>
+            </div>
+            <div>
+                <div class="brand-title">XIAO CAM & TRACKER HUB</div>
+                <div class="brand-sub">Dual Digital Twins &bull; Zero-Collision Command Center</div>
+            </div>
+        </div>
+
+        <div class="dual-connections">
+            <!-- PORT 1: XIAO CAM (Default COM9) -->
+            <div class="conn-box">
+                <span class="conn-tag cam"><i class="fas fa-video"></i> CAM PORT:</span>
+                <select id="cam-port-select" class="port-sel">
+                    {% for p in ports %}
+                    <option value="{{ p }}" {% if p == 'COM9' %}selected{% endif %}>{{ p }}</option>
+                    {% endfor %}
+                    {% if 'COM9' not in ports %}
+                    <option value="COM9" selected>COM9 (Default)</option>
+                    {% endif %}
+                </select>
+
+                <select id="cam-baud-select" class="port-sel" style="width: 85px;">
+                    <option value="115200" selected>115200</option>
+                    <option value="921600">921600</option>
+                </select>
+
+                <button id="btn-cam-connect" class="btn-head btn-head-cam" onclick="toggleConnectCam()">
+                    <i class="fas fa-plug"></i> Connect
+                </button>
+                <button class="btn-head btn-head-disconn" onclick="disconnectCam()" title="Disconnect Camera">
+                    <i class="fas fa-power-off"></i>
+                </button>
+
+                <div id="badge-cam" class="badge-status offline">
+                    <i class="fas fa-circle"></i> OFFLINE
+                </div>
+            </div>
+
+            <!-- PORT 2: MAIN TRACKER / WALKIE-TALKIE -->
+            <div class="conn-box">
+                <span class="conn-tag main"><i class="fas fa-satellite-dish"></i> MAIN PORT:</span>
+                <select id="main-port-select" class="port-sel">
+                    <option value="">Select Main Port...</option>
+                    {% for p in ports %}
+                    {% if p != 'COM9' %}
+                    <option value="{{ p }}" {% if p == 'COM12' %}selected{% endif %}>{{ p }}</option>
+                    {% endif %}
+                    {% endfor %}
+                    {% if 'COM12' not in ports %}
+                    <option value="COM12" selected>COM12 (Main Device)</option>
+                    {% endif %}
+                </select>
+
+
+                <select id="main-baud-select" class="port-sel" style="width: 85px;">
+                    <option value="115200" selected>115200</option>
+                    <option value="921600">921600</option>
+                </select>
+
+                <button id="btn-main-connect" class="btn-head btn-head-main" onclick="toggleConnectMain()">
+                    <i class="fas fa-plug"></i> Connect
+                </button>
+                <button class="btn-head btn-head-disconn" onclick="disconnectMain()" title="Disconnect Main">
+                    <i class="fas fa-power-off"></i>
+                </button>
+
+                <div id="badge-main" class="badge-status offline">
+                    <i class="fas fa-circle"></i> OFFLINE
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- ─── WORKSPACE (3-COLUMN LAYOUT) ───────────────────────────────── -->
+    <div class="workspace">
+
+        <!-- ─── COLUMN 1: DEVICE 1 (WALKIE-TALKIE DIGITAL TWIN) ───────── -->
+        <div class="side-twin-1">
+            <div class="device-title-tag">
+                <i class="fas fa-satellite-dish" style="color: var(--accent-purple);"></i> DEVICE 1: WALKIE-TALKIE
+            </div>
+
+            <div class="wt-device">
+                <div class="wt-gps-module"></div>
+                <div class="wt-antenna"></div>
+                <div class="wt-led-l" id="wt-led-l"></div>
+                <div class="wt-led-r" id="wt-led-r"></div>
+
+                <div class="wt-bezel">
+                    <div class="wt-screen" id="wt-screen">
+                        <div class="wt-header">
+                            <span id="wt-hdr-title">ESP32 OS</span>
+                            <span style="display:inline-flex; align-items:center; gap:6px;">
+                                <span id="wt-hdr-temp" style="color:var(--accent-cyan); font-size:10px; font-weight:bold;"><i class="fas fa-thermometer-half"></i> --°C</span>
+                                <span id="wt-hdr-batt">0.0V</span>
+                            </span>
+                        </div>
+                        <div class="wt-body" id="wt-body">Connect Main Port to view screen...</div>
+                        <div class="wt-footer">
+                            <span id="wt-ftr-l">PREV</span>
+                            <span id="wt-ftr-m">SEL</span>
+                            <span id="wt-ftr-r">NEXT</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="wt-controls-area">
+                    <div class="wt-btn wt-btn-up" onmousedown="sendMainBtn(0,1)" onmouseup="sendMainBtn(0,0)" title="UP"></div>
+                    <div class="wt-btn wt-btn-dn" onmousedown="sendMainBtn(1,1)" onmouseup="sendMainBtn(1,0)" title="DOWN"></div>
+                    <div class="wt-btn wt-btn-l" onmousedown="sendMainBtn(2,1)" onmouseup="sendMainBtn(2,0)" title="LEFT/PREV"></div>
+                    <div class="wt-btn wt-btn-r" onmousedown="sendMainBtn(3,1)" onmouseup="sendMainBtn(3,0)" title="RIGHT/NEXT"></div>
+
+                    <div class="wt-btn wt-btn-ex1" onmousedown="sendMainBtn(4,1)" onmouseup="sendMainBtn(4,0)" title="SELECT/OK"></div>
+                    <div class="wt-btn wt-btn-ex2" onmousedown="sendMainBtn(6,1)" onmouseup="sendMainBtn(6,0)" title="EXTRA 2"></div>
+                    <div class="wt-btn wt-btn-ex3" onmousedown="sendMainBtn(7,1)" onmouseup="sendMainBtn(7,0)" title="EXTRA 3"></div>
+                    <div class="wt-btn wt-btn-sel" onmousedown="sendMainBtn(5,1)" onmouseup="sendMainBtn(5,0)" title="EXTRA 1 (BACK)"></div>
+                </div>
+
+                <div class="wt-logo-area">
+                    <svg viewBox="0 0 100 100">
+                        <path d="M 50 90 C 20 60 10 40 10 30 C 10 15 25 10 35 15 C 45 20 50 30 50 30 C 50 30 55 20 65 15 C 75 10 90 15 90 30 C 90 40 80 60 50 90" stroke-width="4"/>
+                        <path d="M 40 40 L 45 30 L 60 35 L 65 25 L 75 40 C 75 60 60 70 50 70 C 40 70 35 55 40 40" stroke-width="3"/>
+                    </svg>
+                </div>
+
+                <!-- Quick Action Buttons for Main Device -->
+                <div class="c-btn-action-row" style="margin-top: 8px; width: 100%; padding: 0 4px;">
+                    <button class="c-btn" style="flex:1;" onclick="toggleMainMic()" title="Toggle Main Device Microphone (INMP441)">
+                        <i class="fas fa-microphone"></i> Toggle Mic
+                    </button>
+                    <button class="c-btn" style="flex:1;" onclick="toggleMainSpk()" title="Toggle Main Device Speaker">
+                        <i class="fas fa-volume-up"></i> Toggle Spk
+                    </button>
+                    <button class="c-btn" style="flex:1;" onclick="setMainMode(13)" title="Switch to USB Audio / Mic Mode">
+                        <i class="fas fa-podcast"></i> USB Mic
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── COLUMN 2: DEVICE 2 (XIAO CAM VIRTUAL HARDWARE & 172x320 DISPLAY) ─ -->
+        <div class="side-twin-2">
+            <div class="device-title-tag">
+                <i class="fas fa-camera" style="color: var(--primary);"></i> DEVICE 2: XIAO CAM (172&times;320)
+            </div>
+
+            <div class="cam-device-case">
+                <!-- Camera Case Header -->
+                <div class="cam-case-top">
+                    <span class="cam-badge-label">SEEED XIAO SENSE</span>
+                    <span id="cam-hdr-temp" style="font-size: 10px; color: var(--accent-cyan); font-family: 'Share Tech Mono', monospace; font-weight: bold; background: rgba(0,212,255,0.12); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,212,255,0.25);"><i class="fas fa-thermometer-half"></i> --°C</span>
+                    <div class="cam-lens-accent">
+                        <div class="cam-led-status" id="cam-led-indicator"></div>
+                        <div class="cam-lens-circle"></div>
+                    </div>
+                </div>
+
+                <!-- Exact 172 x 320 Pixel ST7789 Display -->
+                <div class="cam-tft-bezel" title="Click Viewfinder to Expand">
+                    <div class="cam-tft-screen">
+                        
+                        <!-- Top 172 x 172 px: Live Camera Stream Viewfinder -->
+                        <div class="cam-vf-area" onclick="openBigMonitor()">
+                            <img id="cam-feed-img" class="cam-vf-img" src="/video_feed" alt="Camera Stream" onerror="handleStreamErr(this)">
+                            
+                            <!-- Paused Stream Overlay Click-to-Start -->
+                            <div id="vf-paused-banner" style="display: none; position: absolute; inset: 0; background: rgba(8,10,15,0.85); backdrop-filter: blur(2px); flex-direction: column; align-items: center; justify-content: center; gap: 6px; z-index: 5; cursor: pointer;" onclick="event.stopPropagation(); toggleCamStreamState();" title="Click to Start Live Stream">
+                                <i class="fas fa-play-circle" style="font-size: 28px; color: var(--primary); filter: drop-shadow(0 0 8px rgba(0,212,255,0.6));"></i>
+                                <span style="font-size: 10px; font-weight: 700; color: #fff; text-align: center; font-family: 'Share Tech Mono', monospace; line-height: 1.2;">
+                                    STREAM PAUSED<br><span style="font-size: 9px; color: var(--accent-green); font-weight: normal;">CLICK TO START</span>
+                                </span>
+                            </div>
+
+                            <!-- Overlaid Viewfinder HUD -->
+                            <div class="cam-vf-hud" style="z-index: 6;">
+                                <div class="cam-vf-hud-top">
+                                    <span id="hud-cam-res">SVGA</span>
+                                    <span id="hud-cam-fps">0 FPS</span>
+                                </div>
+                                <div class="cam-vf-hud-bot">
+                                    <span id="hud-cam-mode">VIEWFINDER</span>
+                                    <span id="hud-cam-rec" class="cam-tag-rec">● REC</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Bottom 172 x 148 px: UI Menu / Telemetry Panel -->
+                        <div class="cam-tft-menu" id="cam-tft-menu-body">
+                            <div class="cam-menu-hdr" id="cam-menu-title">SCR: VIEWFINDER</div>
+                            <div class="cam-menu-stats">
+                                <div id="cam-stat-q">Quality: Q12 (SVGA)</div>
+                                <div id="cam-stat-fps">C0 D0 fps</div>
+                                <div id="cam-stat-temp">Core: --°C</div>
+                                <div id="cam-stat-heap">Heap: 215 KB</div>
+                                <div id="cam-stat-psram">PSRAM: 7.2 MB</div>
+                            </div>
+                            <div class="cam-menu-rot" id="cam-menu-rot">
+                                Rotation: 0&deg; (180&deg; Inverted)
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- Physical Hardware Buttons on XIAO Cam Casing -->
+                <div class="cam-btn-panel">
+                    <div class="cam-dpad-row">
+                        <button class="c-btn" onclick="sendCamNav('UP')" title="UP (W / Up Arrow)">
+                            <i class="fas fa-chevron-up"></i> UP
+                        </button>
+                        <button class="c-btn c-btn-ok" onclick="sendCamNav('OK')" title="OK / Confirm (Enter / Space)">
+                            OK
+                        </button>
+                        <button class="c-btn" onclick="sendCamNav('DOWN')" title="DOWN (S / Down Arrow)">
+                            <i class="fas fa-chevron-down"></i> DN
+                        </button>
+                    </div>
+
+                    <div class="c-btn-action-row">
+                        <button class="c-btn" onclick="sendCamNav('BACK')" title="BACK / Exit (Esc / B)">
+                            <i class="fas fa-arrow-left"></i> BACK
+                        </button>
+                        <button class="c-btn" onclick="sendCamNav('MENU')" title="Open Main Menu (M)">
+                            <i class="fas fa-bars"></i> MENU
+                        </button>
+                        <button id="btn-cam-rec" class="c-btn c-btn-rec" onclick="toggleCamRec()" title="Toggle Video Recording to SD (R)">
+                            <i class="fas fa-circle"></i> REC
+                        </button>
+                    </div>
+
+                    <div class="c-btn-action-row">
+                        <button class="c-btn" onclick="toggleDisplayFlip()" title="Flip physical screen 180 degrees (F)">
+                            <i class="fas fa-rotate"></i> Flip 180&deg;
+                        </button>
+                        <button class="c-btn" onclick="cycleCamVideoRotation()" title="Rotate Browser Video 90°">
+                            <i class="fas fa-redo"></i> Rot 90&deg;
+                        </button>
+                        <button class="c-btn" onclick="toggleCamStreamState()" title="Toggle Webcam Streaming (V)">
+                            <i class="fas fa-broadcast-tower"></i> Stream
+                        </button>
+                    </div>
+
+                    <div class="c-btn-action-row" style="margin-top: 5px;">
+                        <button class="c-btn" id="btn-vf-fit" onclick="toggleVfFitMode()" title="Toggle Contain (Full uncropped view) vs Cover (Fill viewfinder)">
+                            <i class="fas fa-compress-alt"></i> Fit View
+                        </button>
+                        <button class="c-btn" onclick="toggleSensorFlip('VF')" title="Camera Sensor Hardware Vertical Flip">
+                            <i class="fas fa-arrows-alt-v"></i> V-Flip
+                        </button>
+                        <button class="c-btn" onclick="toggleSensorFlip('HM')" title="Camera Sensor Hardware Horizontal Mirror">
+                            <i class="fas fa-arrows-alt-h"></i> H-Mir
+                        </button>
+                        <button class="c-btn" onclick="openBigMonitor()" title="Expand High-Definition Monitor">
+                            <i class="fas fa-expand"></i> Max
+                        </button>
+                    </div>
+
+                    <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 6px; padding: 0 4px; font-size: 10px;">
+                        <span style="color: var(--text-muted); font-weight: bold;">JUMP:</span>
+                        <select id="cam-screen-jump-sel" class="port-sel" style="flex:1; margin-left: 6px; font-size: 10px; padding: 2px 4px; height: 24px;" onchange="jumpCamScreen(this.value)">
+                            <option value="9">9: USB Webcam (PC Live Stream)</option>
+                            <option value="0">0: Viewfinder (TFT Display)</option>
+                            <option value="1">1: Main Menu</option>
+                            <option value="2">2: Settings</option>
+                            <option value="3">3: Video Files</option>
+                            <option value="4">4: Playback</option>
+                            <option value="5">5: ESP-NOW Video</option>
+                            <option value="6">6: Audio Recorder</option>
+                            <option value="7">7: QR Reader</option>
+                            <option value="8">8: Live Radio</option>
+                            <option value="10">10: WiFi Stream</option>
+                        </select>
+                    </div>
+
+                    <!-- Keyboard Quick Map Help -->
+                    <div style="font-size: 10px; color: var(--text-dim); text-align: center; margin-top: 4px; line-height: 1.4;">
+                        Keys: <span class="kbd-pill">W</span> <span class="kbd-pill">S</span> Nav &bull; <span class="kbd-pill">Enter</span> OK &bull; <span class="kbd-pill">Esc</span> Back &bull; <span class="kbd-pill">R</span> Rec &bull; <span class="kbd-pill">F</span> Flip
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- ─── COLUMN 3: LIVE COMMAND CENTER & TUNING TABS ───────────────── -->
+        <div class="main-studio-col">
+            <!-- Studio Tabs Navigation -->
+            <div class="studio-tabs">
+                <div class="s-tab active" onclick="switchStudioTab('tuning')">
+                    <i class="fas fa-sliders-h"></i> Camera Studio & Mic
+                </div>
+                <div class="s-tab" onclick="switchStudioTab('files')">
+                    <i class="fas fa-folder-open"></i> Camera SD Files
+                </div>
+                <div class="s-tab" onclick="switchStudioTab('main-tele')">
+                    <i class="fas fa-chart-line"></i> Main Device Telemetry
+                </div>
+                <div class="s-tab" onclick="switchStudioTab('raw')">
+                    <i class="fas fa-code"></i> Live State Dump
+                </div>
+            </div>
+
+            <!-- Studio Content Container -->
+            <div class="studio-content">
+
+                <!-- TAB 1: CAMERA STUDIO & MICROPHONE SPECTRUM -->
+                <div id="tab-tuning" class="tab-panel active">
+                    <div class="card-grid">
+
+                        <!-- Camera Parameters Tuning Card -->
+                        <div class="dash-card">
+                            <div class="dash-card-title">
+                                <span><i class="fas fa-camera-retro"></i> OV3660 Camera Sensor Tuning</span>
+                                <span style="font-size: 11px; color: var(--primary);">Real-time</span>
+                            </div>
+
+                            <!-- Resolution / Frame Size -->
+                            <div class="tune-row">
+                                <span class="tune-label">Resolution:</span>
+                                <select id="cam-res-select" class="port-sel" style="flex: 1;" onchange="setCamParam('RES', this.value)">
+                                    <option value="0">96x96</option>
+                                    <option value="1">QQVGA (160x120)</option>
+                                    <option value="2">QCIF (176x144)</option>
+                                    <option value="3">HQVGA (240x176)</option>
+                                    <option value="4">240x240</option>
+                                    <option value="5">QVGA (320x240)</option>
+                                    <option value="6">CIF (400x296)</option>
+                                    <option value="7">HVGA (480x320)</option>
+                                    <option value="8">VGA (640x480)</option>
+                                    <option value="9" selected>SVGA (800x600)</option>
+                                    <option value="10">XGA (1024x768)</option>
+                                    <option value="11">HD (1280x720)</option>
+                                    <option value="12">SXGA (1280x1024)</option>
+                                    <option value="13">UXGA (1600x1200)</option>
+                                </select>
+                            </div>
+
+                            <!-- Quality Slider -->
+                            <div class="tune-row">
+                                <span class="tune-label">JPEG Quality:</span>
+                                <input type="range" id="cam-q" min="10" max="63" value="12" oninput="updateVal('val-q', this.value); setCamParam('Q', this.value)">
+                                <span class="tune-val" id="val-q">12</span>
+                            </div>
+
+                            <!-- Brightness -->
+                            <div class="tune-row">
+                                <span class="tune-label">Brightness:</span>
+                                <input type="range" id="cam-b" min="-2" max="2" value="0" oninput="updateVal('val-b', this.value); setCamParam('B', this.value)">
+                                <span class="tune-val" id="val-b">0</span>
+                            </div>
+
+                            <!-- Contrast -->
+                            <div class="tune-row">
+                                <span class="tune-label">Contrast:</span>
+                                <input type="range" id="cam-c" min="-2" max="2" value="0" oninput="updateVal('val-c', this.value); setCamParam('C', this.value)">
+                                <span class="tune-val" id="val-c">0</span>
+                            </div>
+
+                            <!-- Saturation -->
+                            <div class="tune-row">
+                                <span class="tune-label">Saturation:</span>
+                                <input type="range" id="cam-s" min="-2" max="2" value="0" oninput="updateVal('val-s', this.value); setCamParam('S', this.value)">
+                                <span class="tune-val" id="val-s">0</span>
+                            </div>
+
+                            <div style="display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
+                                <button class="c-btn" style="flex: 1; min-width: 90px;" onclick="toggleSensorFlip('HM')">
+                                    <i class="fas fa-arrows-alt-h"></i> H-Mirror
+                                </button>
+                                <button class="c-btn" style="flex: 1; min-width: 90px;" onclick="toggleSensorFlip('VF')">
+                                    <i class="fas fa-arrows-alt-v"></i> V-Flip
+                                </button>
+                                <button class="c-btn" style="flex: 1; min-width: 90px;" onclick="cycleCamVideoRotation()">
+                                    <i class="fas fa-redo"></i> Rot 90&deg;
+                                </button>
+                                <button class="c-btn" style="flex: 1; min-width: 90px;" onclick="captureSnapshot()">
+                                    <i class="fas fa-download"></i> Snapshot
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 16 kHz Microphone & Spectrum Card -->
+                        <div class="dash-card">
+                            <div class="dash-card-title">
+                                <span><i class="fas fa-microphone-lines"></i> Live 16 kHz PDM Microphone</span>
+                                <span id="val-db" style="font-family: 'JetBrains Mono', monospace; font-weight: bold; color: var(--accent-green);">-60.0 dB</span>
+                            </div>
+
+                            <!-- VU Meter -->
+                            <div>
+                                <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-bottom: 2px;">
+                                    <span>Signal Level</span>
+                                    <span id="vu-db-text">-60 dB</span>
+                                </div>
+                                <div class="vu-meter-track">
+                                    <div class="vu-meter-bar" id="vu-bar"></div>
+                                </div>
+                            </div>
+
+                            <!-- 48-Band Spectrum Analyzer -->
+                            <div>
+                                <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">FFT Frequency Spectrum (48 Bands)</div>
+                                <div class="spectrum-bar-container" id="spectrum-bars">
+                                    <!-- 48 Bars generated by JS -->
+                                </div>
+                            </div>
+
+                            <!-- Audio Output Settings -->
+                            <div class="tune-row" style="margin-top: 6px;">
+                                <span class="tune-label">Output Device:</span>
+                                <select id="audio-out-select" class="port-sel" style="flex: 1;" onchange="setAudioOutDev(this.value)">
+                                    {% for name, idx in audio_devices.items() %}
+                                    <option value="{{ idx }}">{{ name }}</option>
+                                    {% endfor %}
+                                    {% if not audio_devices %}
+                                    <option value="">Default Speaker</option>
+                                    {% endif %}
+                                </select>
+                            </div>
+
+                            <div class="tune-row">
+                                <span class="tune-label">Audio Gain:</span>
+                                <input type="range" id="audio-gain" min="0.5" max="4.0" step="0.1" value="1.0" oninput="updateVal('val-gain', this.value); setAudioGain(this.value)">
+                                <span class="tune-val" id="val-gain">1.0x</span>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- TAB 2: CAMERA SD CARD FILE MANAGER -->
+                <div id="tab-files" class="tab-panel">
+                    <div class="file-box">
+                        <div class="file-toolbar">
+                            <button class="c-btn" onclick="navCamFsUp()"><i class="fas fa-arrow-up"></i> Up</button>
+                            <div class="file-path-tag" id="fs-path-display">/</div>
+                            <button class="c-btn" onclick="refreshCamFs()"><i class="fas fa-sync-alt"></i> Refresh</button>
+                        </div>
+                        <div style="flex: 1; overflow-y: auto; max-height: 520px;">
+                            <table class="file-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Size</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="cam-file-list">
+                                    <tr><td colspan="3" style="text-align: center; color: var(--text-muted); padding: 30px;">Connect XIAO CAM to explore SD Card recordings...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 3: MAIN DEVICE TELEMETRY -->
+                <div id="tab-main-tele" class="tab-panel">
+                    <div class="card-grid">
+                        <div class="dash-card">
+                            <div class="dash-card-title">
+                                <span><i class="fas fa-battery-half"></i> System Power & Mode</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <div style="color: var(--text-muted); font-size: 11px;">BATTERY VOLTAGE</div>
+                                    <div style="font-size: 28px; font-weight: 800;" id="main-batt">0.0<span style="font-size: 14px; font-weight: normal; color: var(--text-muted);">V</span></div>
+                                </div>
+                                <div>
+                                    <div style="color: var(--text-muted); font-size: 11px;">ACTIVE MODE</div>
+                                    <div style="font-size: 18px; font-weight: 700; color: var(--accent-purple);" id="main-mode">STANDBY</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="dash-card">
+                            <div class="dash-card-title">
+                                <span><i class="fas fa-location-arrow"></i> GPS Navigation</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between;">
+                                <div>
+                                    <div style="color: var(--text-muted); font-size: 11px;">LATITUDE</div>
+                                    <div style="font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: bold;" id="main-lat">0.000000</div>
+                                </div>
+                                <div>
+                                    <div style="color: var(--text-muted); font-size: 11px;">LONGITUDE</div>
+                                    <div style="font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: bold;" id="main-lon">0.000000</div>
+                                </div>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+                                <div>
+                                    <div style="color: var(--text-muted); font-size: 11px;">SPEED</div>
+                                    <div style="font-size: 16px; font-weight: bold;" id="main-speed">0.0 km/h</div>
+                                </div>
+                                <div>
+                                    <div style="color: var(--text-muted); font-size: 11px;">SATELLITES</div>
+                                    <div style="font-size: 16px; font-weight: bold;" id="main-sats">0</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="dash-card">
+                            <div class="dash-card-title">
+                                <span><i class="fas fa-cube"></i> IMU Orientation</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-around; align-items: center; margin-top: 6px;">
+                                <div style="text-align: center;">
+                                    <div style="color: var(--text-muted); font-size: 11px;">PITCH</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: var(--accent-green);" id="main-pitch">0&deg;</div>
+                                </div>
+                                <div style="text-align: center;">
+                                    <div style="color: var(--text-muted); font-size: 11px;">ROLL</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: var(--primary);" id="main-roll">0&deg;</div>
+                                </div>
+                                <div style="text-align: center;">
+                                    <div style="color: var(--text-muted); font-size: 11px;">YAW</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: var(--accent-yellow);" id="main-yaw">0&deg;</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Main Device INMP441 Live Microphone & Spectrum Card -->
+                        <div class="dash-card">
+                            <div class="dash-card-title">
+                                <span><i class="fas fa-microphone"></i> Main Device Mic (INMP441 / USB Mic)</span>
+                                <span id="main-val-db" style="font-family: 'JetBrains Mono', monospace; font-weight: bold; color: var(--accent-yellow);">-60.0 dB</span>
+                            </div>
+
+                            <!-- VU Meter -->
+                            <div>
+                                <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-bottom: 2px;">
+                                    <span>Signal Level</span>
+                                    <span id="main-vu-db-text">-60 dB</span>
+                                </div>
+                                <div class="vu-meter-track">
+                                    <div class="vu-meter-bar" id="main-vu-bar" style="background: linear-gradient(90deg, #00e5ff 0%, #eab308 70%, #ef4444 100%);"></div>
+                                </div>
+                            </div>
+
+                            <!-- 48-Band Spectrum Analyzer -->
+                            <div>
+                                <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Main Device FFT Frequency Spectrum (48 Bands)</div>
+                                <div class="spectrum-bar-container" id="main-spectrum-bars">
+                                    <!-- 48 Bars generated by JS -->
+                                </div>
+                            </div>
+
+                            <!-- Quick Controls -->
+                            <div class="tune-row" style="margin-top: 6px;">
+                                <button class="c-btn" style="flex:1;" onclick="toggleMainMic()">
+                                    <i class="fas fa-microphone"></i> Toggle Mic
+                                </button>
+                                <button class="c-btn" style="flex:1;" onclick="toggleMainSpk()">
+                                    <i class="fas fa-volume-up"></i> Toggle Spk
+                                </button>
+                                <button class="c-btn" style="flex:1;" onclick="setMainMode(13)">
+                                    <i class="fas fa-podcast"></i> USB Audio Mode
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 4: RAW DATA / SERIAL DUMP -->
+                <div id="tab-raw" class="tab-panel">
+                    <div class="dash-card">
+                        <div class="dash-card-title">
+                            <span><i class="fas fa-code"></i> Live Dual-Device JSON Telemetry Stream</span>
+                            <button class="c-btn" style="padding: 3px 8px; font-size: 11px;" onclick="copyRawJson()"><i class="fas fa-copy"></i> Copy</button>
+                        </div>
+                        <pre class="raw-json-box" id="raw-json-display">{}</pre>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ─── BIG MONITOR MODAL ─────────────────────────────────────────── -->
+    <div class="modal-overlay" id="big-modal" onclick="closeBigMonitor()">
+        <div class="modal-body" onclick="event.stopPropagation()" style="min-height: 480px;">
+            <div class="modal-hdr">
+                <span style="font-weight: 700; color: var(--primary);"><i class="fas fa-expand"></i> Camera High-Definition Live Monitor</span>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <button class="c-btn" onclick="toggleCamStreamState()" title="Restart Live Camera Stream"><i class="fas fa-sync-alt"></i> Reconnect</button>
+                    <button class="c-btn" onclick="closeBigMonitor()"><i class="fas fa-times"></i></button>
+                </div>
+            </div>
+            <div style="width: 100%; min-height: 420px; background: #000; display: flex; align-items: center; justify-content: center; position: relative;">
+                <img id="modal-cam-img" class="modal-img" src="" alt="Live Camera Monitor" onerror="handleStreamErr(this)">
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── CLIENT-SIDE SCRIPT & EVENT SYSTEM ─────────────────────────── -->
+    <script>
+        let evtSource = null;
+        let isCamConn = false;
+        let isMainConn = false;
+        let camFsCurrentPath = "/";
+        let camRecording = false;
+        let camRotation = 0;
+
+        // Initialize 48 Spectrum Bars for Camera
+        const specContainer = document.getElementById('spectrum-bars');
+        if (specContainer) {
+            for (let i = 0; i < 48; i++) {
+                const bar = document.createElement('div');
+                bar.className = 'spec-bar';
+                bar.id = 's-bar-' + i;
+                specContainer.appendChild(bar);
+            }
+        }
+
+        // Initialize 48 Spectrum Bars for Main Device (INMP441)
+        const mainSpecContainer = document.getElementById('main-spectrum-bars');
+        if (mainSpecContainer) {
+            for (let i = 0; i < 48; i++) {
+                const bar = document.createElement('div');
+                bar.className = 'spec-bar';
+                bar.style.background = 'linear-gradient(180deg, #ef4444 0%, #eab308 50%, #00e5ff 100%)';
+                bar.id = 'main-s-bar-' + i;
+                mainSpecContainer.appendChild(bar);
+            }
+        }
+
+        // Connect / Disconnect Handlers for Port 1 (CAM)
+        function toggleConnectCam() {
+            if (isCamConn) {
+                disconnectCam();
+            } else {
+                connectCam();
+            }
+        }
+
+        function connectCam() {
+            const port = document.getElementById('cam-port-select').value;
+            const baud = document.getElementById('cam-baud-select').value;
+            if (!port) return alert("Please select a Camera COM Port first!");
+
+            fetch('/connect/cam', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({port: port, baudrate: baud})
+            })
+            .then(r => r.json())
+            .then(res => {
+                if (res.success) {
+                    isCamConn = true;
+                    updateCamBadge(true);
+                    ensureStreamListening();
+                    setTimeout(refreshCamStream, 500);
+                    setTimeout(() => refreshCamFs(), 1500);
+                } else {
+                    alert("Failed to connect Camera on " + port + ":\n" + res.error);
+                }
+            })
+            .catch(e => alert("Connection error: " + e));
+        }
+
+        function disconnectCam() {
+            fetch('/disconnect/cam', {method: 'POST'})
+            .then(() => {
+                isCamConn = false;
+                updateCamBadge(false);
+            });
+        }
+
+        function updateCamBadge(online) {
+            const badge = document.getElementById('badge-cam');
+            const btn = document.getElementById('btn-cam-connect');
+            const led = document.getElementById('cam-led-indicator');
+            if (online) {
+                badge.className = 'badge-status online';
+                badge.innerHTML = '<i class="fas fa-circle"></i> ONLINE';
+                btn.innerHTML = '<i class="fas fa-check"></i> Connected';
+                btn.style.background = 'linear-gradient(135deg, #00e676, #00b0ff)';
+                led.className = 'cam-led-status on';
+            } else {
+                badge.className = 'badge-status offline';
+                badge.innerHTML = '<i class="fas fa-circle"></i> OFFLINE';
+                btn.innerHTML = '<i class="fas fa-plug"></i> Connect';
+                btn.style.background = 'linear-gradient(135deg, #00b0ff, #0081cb)';
+                led.className = 'cam-led-status';
+            }
+        }
+
+        // Connect / Disconnect Handlers for Port 2 (MAIN)
+        function toggleConnectMain() {
+            if (isMainConn) {
+                disconnectMain();
+            } else {
+                connectMain();
+            }
+        }
+
+        function connectMain() {
+            const port = document.getElementById('main-port-select').value;
+            const baud = document.getElementById('main-baud-select').value;
+            if (!port) return alert("Please select a Main Device COM Port first!");
+
+            fetch('/connect/main', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({port: port, baudrate: baud})
+            })
+            .then(r => r.json())
+            .then(res => {
+                if (res.success) {
+                    isMainConn = true;
+                    updateMainBadge(true);
+                    ensureStreamListening();
+                } else {
+                    alert("Failed to connect Main Device on " + port + ":\n" + res.error);
+                }
+            })
+            .catch(e => alert("Connection error: " + e));
+        }
+
+        function disconnectMain() {
+            fetch('/disconnect/main', {method: 'POST'})
+            .then(() => {
+                isMainConn = false;
+                updateMainBadge(false);
+            });
+        }
+
+        function updateMainBadge(online) {
+            const badge = document.getElementById('badge-main');
+            const btn = document.getElementById('btn-main-connect');
+            if (online) {
+                badge.className = 'badge-status online';
+                badge.innerHTML = '<i class="fas fa-circle"></i> ONLINE';
+                btn.innerHTML = '<i class="fas fa-check"></i> Connected';
+                btn.style.background = 'linear-gradient(135deg, #00e676, #7c4dff)';
+            } else {
+                badge.className = 'badge-status offline';
+                badge.innerHTML = '<i class="fas fa-circle"></i> OFFLINE';
+                btn.innerHTML = '<i class="fas fa-plug"></i> Connect';
+                btn.style.background = 'linear-gradient(135deg, #7c4dff, #651fff)';
+            }
+        }
+
+        // SSE Real-Time Stream Listener
+        function ensureStreamListening() {
+            if (evtSource) return;
+            evtSource = new EventSource('/stream');
+            evtSource.onmessage = function(e) {
+                try {
+                    const data = JSON.parse(e.data);
+                    handleTelemetry(data);
+                } catch(err) {}
+            };
+            evtSource.onerror = function() {
+                // Reconnect automatically
+            };
+        }
+
+        // Global Telemetry Dispatcher
+        function handleTelemetry(data) {
+            // Update raw display
+            document.getElementById('raw-json-display').innerText = JSON.stringify(data, null, 2);
+
+            // Update Cam connection status from server
+            if (data.cam_connected !== undefined && data.cam_connected !== isCamConn) {
+                isCamConn = data.cam_connected;
+                updateCamBadge(isCamConn);
+            }
+            if (data.main_connected !== undefined && data.main_connected !== isMainConn) {
+                isMainConn = data.main_connected;
+                updateMainBadge(isMainConn);
+            }
+
+            // 1. Camera Twin Display & HUD
+            if (data.fps !== undefined || data.espnow_active) {
+                const fpsVal = parseFloat(data.fps) || (data.espnow_active ? parseFloat(data.espnow_rx_fps || 15) : 0);
+                const hudFps = document.getElementById('hud-cam-fps');
+                const statFps = document.getElementById('cam-stat-fps');
+                const pausedBanner = document.getElementById('vf-paused-banner');
+
+                if (data.espnow_active || (currentCamScreen === 5 && fpsVal > 0)) {
+                    const dispFps = fpsVal > 0 ? fpsVal.toFixed(1) : "15.0";
+                    if (hudFps) { hudFps.innerText = "TX " + dispFps + " FPS"; hudFps.style.color = "#00e676"; }
+                    if (statFps) statFps.innerText = `ESP-NOW Live TX: ${dispFps} fps`;
+                    if (pausedBanner) pausedBanner.style.display = "none";
+                } else if (fpsVal > 0) {
+                    if (hudFps) { hudFps.innerText = Math.round(fpsVal) + " FPS"; hudFps.style.color = "#00e676"; }
+                    if (statFps) statFps.innerText = `FPS: ${Math.round(fpsVal)} (Live)`;
+                    if (pausedBanner) pausedBanner.style.display = "none";
+
+                    // Auto-sync viewfinder image if stalled or zero dimensions
+                    const vfImg = document.getElementById('cam-feed-img');
+                    if (vfImg && vfImg.naturalWidth === 0 && !window._camSyncing) {
+                        window._camSyncing = true;
+                        vfImg.src = "/video_feed?t=" + Date.now();
+                        setTimeout(() => { window._camSyncing = false; }, 2000);
+                    }
+                } else {
+                    if (hudFps) { hudFps.innerText = isCamConn ? "PAUSED" : "OFFLINE"; hudFps.style.color = "#ffb703"; }
+                    if (statFps) statFps.innerText = `FPS: 0 (${isCamConn ? 'Paused' : 'Offline'})`;
+                    if (pausedBanner && isCamConn) pausedBanner.style.display = "flex";
+                }
+            }
+            if (data.screen !== undefined) {
+                currentCamScreen = data.screen;
+                const jumpSel = document.getElementById('cam-screen-jump-sel');
+                if (jumpSel && document.activeElement !== jumpSel) {
+                    jumpSel.value = data.screen;
+                }
+            }
+            if (data.screenName) {
+                document.getElementById('hud-cam-mode').innerText = data.screenName;
+                document.getElementById('cam-menu-title').innerText = "SCR: " + data.screenName;
+            }
+            if (data.recording !== undefined) {
+                camRecording = !!data.recording;
+                const recHud = document.getElementById('hud-cam-rec');
+                const recBtn = document.getElementById('btn-cam-rec');
+                const camLed = document.getElementById('cam-led-indicator');
+                recHud.style.display = camRecording ? "inline" : "none";
+                if (camRecording) {
+                    recBtn.classList.add('active');
+                    camLed.className = 'cam-led-status rec';
+                } else {
+                    recBtn.classList.remove('active');
+                    if (isCamConn) camLed.className = 'cam-led-status on';
+                }
+            }
+            if (data.heap !== undefined) {
+                document.getElementById('cam-stat-heap').innerText = "Heap: " + Math.round(data.heap / 1024) + " KB";
+            }
+            if (data.psram !== undefined) {
+                document.getElementById('cam-stat-psram').innerText = "PSRAM: " + (data.psram / (1024*1024)).toFixed(1) + " MB";
+            }
+            if (data.rotation !== undefined) {
+                camRotation = data.rotation;
+                document.getElementById('cam-menu-rot').innerText = `Rotation: ${camRotation}° ${camRotation === 0 ? '(180° Inverted)' : '(Default)'}`;
+            }
+
+            // Core temperatures for both devices
+            if (data.cam_core_temp !== undefined || data.coreTemp !== undefined) {
+                const ct = data.cam_core_temp !== undefined ? data.cam_core_temp : data.coreTemp;
+                if (ct !== null && ct !== undefined) {
+                    const text = `${parseFloat(ct).toFixed(0)}°C`;
+                    const elHdr = document.getElementById('cam-hdr-temp');
+                    const elStat = document.getElementById('cam-stat-temp');
+                    if (elHdr) elHdr.innerHTML = `<i class="fas fa-thermometer-half"></i> ${text}`;
+                    if (elStat) elStat.innerText = `Core: ${text}`;
+                }
+            }
+            if (data.main_core_temp !== undefined) {
+                const mt = data.main_core_temp;
+                if (mt !== null && mt !== undefined) {
+                    const elWt = document.getElementById('wt-hdr-temp');
+                    if (elWt) elWt.innerHTML = `<i class="fas fa-thermometer-half"></i> ${parseFloat(mt).toFixed(0)}°C`;
+                }
+            }
+
+            // 2. Camera Microphone Level & Spectrum (PDM Mic)
+            const camDb = data.cam_mic_db !== undefined ? data.cam_mic_db : data.mic_db;
+            if (camDb !== undefined) {
+                const db = Number(camDb);
+                const valDbEl = document.getElementById('val-db');
+                const vuDbEl = document.getElementById('vu-db-text');
+                const vuBarEl = document.getElementById('vu-bar');
+                if (valDbEl) valDbEl.innerText = db.toFixed(1) + " dB";
+                if (vuDbEl) vuDbEl.innerText = db.toFixed(1) + " dB";
+                const vuPct = Math.max(0, Math.min(100, ((db + 60.0) / 60.0) * 100));
+                if (vuBarEl) vuBarEl.style.width = vuPct + "%";
+            }
+            const camSpec = data.cam_mic_spectrum || data.mic_spectrum;
+            if (camSpec && Array.isArray(camSpec)) {
+                for (let i = 0; i < Math.min(48, camSpec.length); i++) {
+                    const barEl = document.getElementById('s-bar-' + i);
+                    if (barEl) {
+                        const h = Math.max(2, Math.min(65, Math.round(camSpec[i] * 65)));
+                        barEl.style.height = h + "px";
+                    }
+                }
+            }
+
+            // Main Device Microphone Level & Spectrum (INMP441 / USB Mic)
+            if (data.main_mic_db !== undefined) {
+                const mDb = Number(data.main_mic_db);
+                const mValDbEl = document.getElementById('main-val-db');
+                const mVuDbEl = document.getElementById('main-vu-db-text');
+                const mVuBarEl = document.getElementById('main-vu-bar');
+                if (mValDbEl) mValDbEl.innerText = mDb.toFixed(1) + " dB";
+                if (mVuDbEl) mVuDbEl.innerText = mDb.toFixed(1) + " dB";
+                const mVuPct = Math.max(0, Math.min(100, ((mDb + 60.0) / 60.0) * 100));
+                if (mVuBarEl) mVuBarEl.style.width = mVuPct + "%";
+            }
+            if (data.main_mic_spectrum && Array.isArray(data.main_mic_spectrum)) {
+                for (let i = 0; i < Math.min(48, data.main_mic_spectrum.length); i++) {
+                    const mBarEl = document.getElementById('main-s-bar-' + i);
+                    if (mBarEl) {
+                        const h = Math.max(2, Math.min(65, Math.round(data.main_mic_spectrum[i] * 65)));
+                        mBarEl.style.height = h + "px";
+                    }
+                }
+            }
+
+            // 3. Main Device (Walkie-Talkie) Twin Display & Telemetry
+            if (data.vBatt !== undefined || data.main_vBatt !== undefined) {
+                const v = data.main_vBatt !== undefined ? data.main_vBatt : data.vBatt;
+                const battEl = document.getElementById('main-batt');
+                if (battEl) battEl.innerHTML = Number(v).toFixed(1) + "<span>V</span>";
+            }
+            if (data.appMode !== undefined || data.main_appMode !== undefined) {
+                const m = data.main_appMode !== undefined ? data.main_appMode : data.appMode;
+                const modeEl = document.getElementById('main-mode');
+                if (modeEl) modeEl.innerText = APP_MODE_NAMES[m] || ("MODE " + m);
+            }
+            if (data.gpsLat !== undefined || data.main_gpsLat !== undefined) {
+                const lat = data.main_gpsLat !== undefined ? data.main_gpsLat : data.gpsLat;
+                const lon = data.main_gpsLon !== undefined ? data.main_gpsLon : data.gpsLon;
+                const spd = data.main_gpsSpeed !== undefined ? data.main_gpsSpeed : data.gpsSpeed;
+                const sats = data.main_gpsSats !== undefined ? data.main_gpsSats : data.gpsSats;
+                const latEl = document.getElementById('main-lat');
+                const lonEl = document.getElementById('main-lon');
+                const spdEl = document.getElementById('main-speed');
+                const satsEl = document.getElementById('main-sats');
+                if (latEl) latEl.innerText = Number(lat || 0).toFixed(6);
+                if (lonEl) lonEl.innerText = Number(lon || 0).toFixed(6);
+                if (spdEl) spdEl.innerText = Number(spd || 0).toFixed(1) + " km/h";
+                if (satsEl) satsEl.innerText = sats || 0;
+            }
+            if (data.imuPitch !== undefined || data.main_imuPitch !== undefined) {
+                const pitch = data.main_imuPitch !== undefined ? data.main_imuPitch : data.imuPitch;
+                const roll = data.main_imuRoll !== undefined ? data.main_imuRoll : data.imuRoll;
+                const yaw = data.main_imuYaw !== undefined ? data.main_imuYaw : data.imuYaw;
+                const pEl = document.getElementById('main-pitch');
+                const rEl = document.getElementById('main-roll');
+                const yEl = document.getElementById('main-yaw');
+                if (pEl) pEl.innerText = Math.round(pitch || 0) + "°";
+                if (rEl) rEl.innerText = Math.round(roll || 0) + "°";
+                if (yEl) yEl.innerText = Math.round(yaw || 0) + "°";
+            }
+
+            // Update Walkie-Talkie Virtual Screen
+            updateVirtualTFT(data);
+        }
+
+        const APP_MODE_NAMES = {
+            0: "GPS NAVIGATOR", 1: "IMU SENSOR", 2: "ENVIRONMENT", 3: "COMM PROTOCOL",
+            4: "SATELLITE", 5: "RADAR TRACKER", 6: "SPECTRUM", 7: "POWER STATS",
+            8: "AUDIO ENGINE", 9: "RECORDINGS", 10: "SETTINGS", 11: "SYSTEM INFO",
+            12: "SD EXPLORER", 13: "USB MIC", 14: "BT AUDIO", 15: "MESH NET", 16: "LIVE RADIO",
+            17: "LIVE VIDEO (ESP-NOW)", 22: "CLOCK / IDLE"
+        };
+        const MENU_NAMES = [
+            "GPS", "IMU", "ENV", "COMM", "SAT", "RADAR", "SPEC", "PWR",
+            "AUDIO", "REC", "SET", "SYS", "SD", "MIC", "BT", "MESH", "RADIO"
+        ];
+        const MENU_ICONS = [
+            "fa-location-arrow", "fa-compass", "fa-leaf", "fa-wifi", "fa-satellite", "fa-crosshairs", "fa-chart-bar", "fa-battery-full",
+            "fa-music", "fa-microphone", "fa-cog", "fa-info-circle", "fa-folder-open", "fa-podcast", "fa-bluetooth", "fa-project-diagram", "fa-broadcast-tower"
+        ];
+        const CHANNELS = ["433.050", "433.250", "433.500", "433.750"];
+
+        function updateVirtualTFT(state) {
+            const appMode = state.appMode !== undefined ? state.appMode : (state.main_appMode !== undefined ? state.main_appMode : 0);
+            const navState = state.navState !== undefined ? state.navState : (state.main_navState !== undefined ? state.main_navState : 0);
+            const vBatt = state.vBatt !== undefined ? state.vBatt : (state.main_vBatt || 0.0);
+            const menuSel = state.menuSel !== undefined ? state.menuSel : (state.main_menuSel || 0);
+            const lrPttHeld = !!(state.lrPttHeld || state.main_lrPttHeld);
+
+            const hdrBatt = document.getElementById('wt-hdr-batt');
+            const hdrTitle = document.getElementById('wt-hdr-title');
+            const ftrL = document.getElementById('wt-ftr-l');
+            const ftrM = document.getElementById('wt-ftr-m');
+            const ftrR = document.getElementById('wt-ftr-r');
+            const body = document.getElementById('wt-body');
+            const ledL = document.getElementById('wt-led-l');
+            const ledR = document.getElementById('wt-led-r');
+
+            if (hdrBatt) hdrBatt.innerText = Number(vBatt).toFixed(1) + "V";
+
+            if (ledR) {
+                if (appMode === 16 && lrPttHeld) {
+                    ledR.className = "wt-led-r wt-led-tx";
+                } else {
+                    ledR.className = "wt-led-r";
+                }
+            }
+
+            if (navState === 0) { // CLOCK / IDLE
+                if (hdrTitle) hdrTitle.innerText = "ESP32 CLOCK";
+                if (ftrL) ftrL.innerText = "";
+                if (ftrM) ftrM.innerText = "MENU";
+                if (ftrR) ftrR.innerText = "";
+                const d = new Date();
+                const timeStr = d.getHours().toString().padStart(2,'0') + ":" + d.getMinutes().toString().padStart(2,'0');
+                if (body) {
+                    body.innerHTML = `<div class="clock-time">${timeStr}</div><div class="clock-date">SYSTEM READY &bull; STANDBY</div>`;
+                }
+            } 
+            else if (navState === 1) { // MAIN MENU
+                if (hdrTitle) hdrTitle.innerText = "MAIN MENU";
+                if (ftrL) ftrL.innerText = "PREV";
+                if (ftrM) ftrM.innerText = "ENTER";
+                if (ftrR) ftrR.innerText = "NEXT";
+                
+                let html = '<div class="menu-grid">';
+                let sel = menuSel;
+                let startIdx = Math.max(0, sel - 4);
+                if (startIdx > MENU_NAMES.length - 9) startIdx = Math.max(0, MENU_NAMES.length - 9);
+                
+                for (let i = 0; i < 9; i++) {
+                    let idx = startIdx + i;
+                    if (idx < MENU_NAMES.length) {
+                        let active = (idx === sel) ? "active" : "";
+                        html += `<div class="menu-icon ${active}"><i class="fas ${MENU_ICONS[idx]}"></i><span>${MENU_NAMES[idx]}</span></div>`;
+                    }
+                }
+                html += '</div>';
+                if (body) body.innerHTML = html;
+            }
+            else if (navState === 2) { // MODULE RUNNING
+                if (appMode === 16) { // LIVE RADIO
+                    if (hdrTitle) hdrTitle.innerText = "LIVE RADIO";
+                    const lrPage = state.lrPage !== undefined ? state.lrPage : (state.main_lrPage || 0);
+                    if (lrPage === 0) {
+                        if (ftrL) ftrL.innerText = "PTT";
+                        if (ftrM) ftrM.innerText = "MENU";
+                        if (ftrR) ftrR.innerText = "CHAN";
+                        let ch = state.lrChannel !== undefined ? state.lrChannel : (state.main_lrChannel || 0);
+                        if (body) {
+                            body.innerHTML = `
+                                <div class="lr-box">
+                                    <div class="lr-chan">CHANNEL ${ch + 1}</div>
+                                    <div class="lr-freq">${CHANNELS[ch % 4]} MHz</div>
+                                </div>
+                                <div class="lr-status-box">RX: STANDBY &nbsp;&bull;&nbsp; SIG: ■■■■</div>
+                                ${lrPttHeld ? '<div class="lr-tx">TRANSMITTING...</div>' : ''}
+                            `;
+                        }
+                    } else {
+                        if (ftrL) ftrL.innerText = "-";
+                        if (ftrM) ftrM.innerText = "BACK";
+                        if (ftrR) ftrR.innerText = "+";
+                        if (body) {
+                            body.innerHTML = `
+                                <div style="font-weight:bold; color:var(--tft-yellow); margin-bottom:8px; text-align:center;">RADIO SETTINGS</div>
+                                <div class="set-list">
+                                    <div class="set-row"><span>Mic Gain</span> <span class="set-val">${state.lrMicGain || state.main_lrMicGain || 0}</span></div>
+                                    <div class="set-row"><span>Vol Gain</span> <span class="set-val">${state.lrVolGain || state.main_lrVolGain || 1.0}</span></div>
+                                    <div class="set-row"><span>Noise Gate</span> <span class="set-val">${state.lrNoiseGate || state.main_lrNoiseGate || 0}</span></div>
+                                    <div class="set-row"><span>Squelch</span> <span class="set-val">${state.lrSquelch || state.main_lrSquelch || 0}</span></div>
+                                </div>
+                            `;
+                        }
+                    }
+                } else if (appMode === 13) { // USB MIC / USB AUDIO
+                    if (hdrTitle) hdrTitle.innerText = "USB AUDIO";
+                    if (ftrL) ftrL.innerText = "MIC";
+                    if (ftrM) ftrM.innerText = "MENU";
+                    if (ftrR) ftrR.innerText = "SPK";
+                    
+                    // Strictly bind to Main Device microphone metrics (Zero cross-talk from Camera)
+                    let db = state.main_mic_db !== undefined ? state.main_mic_db : -60.0;
+                    let pct = Math.max(0, Math.min(100, (db + 60.0) / 60.0 * 100));
+                    let isStreaming = !!state.main_mic_active || db > -55;
+                    
+                    let spectrumHtml = `<div style="display:flex; align-items:flex-end; justify-content:space-between; height: 75px; width: 100%; margin-top: 6px; border-bottom: 1px solid #333;">`;
+                    let bands = state.main_mic_spectrum || Array(48).fill(0);
+                    for(let i=0; i<48; i++) {
+                        let h = Math.max(2, Math.min(100, (bands[i] || 0) * 1500));
+                        let color = h > 80 ? '#ef4444' : (h > 50 ? '#eab308' : '#00e5ff');
+                        spectrumHtml += `<div style="width: 3px; height: ${h}%; background: ${color}; border-radius: 2px 2px 0 0;"></div>`;
+                    }
+                    spectrumHtml += `</div>`;
+                    
+                    if (body) {
+                        body.innerHTML = `
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                                <span style="font-size: 10px; font-weight:bold; color: ${isStreaming ? '#22c55e' : '#888'}; background: ${isStreaming ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)'}; padding: 2px 6px; border-radius: 4px; border: 1px solid ${isStreaming ? 'rgba(34,197,94,0.4)' : '#333'};">
+                                    <i class="fas fa-circle" style="font-size:7px; vertical-align:middle; margin-right:3px;"></i>${isStreaming ? 'MIC ON (TX)' : 'MIC STANDBY'}
+                                </span>
+                                <span style="font-size: 10px; color: var(--tft-yellow); font-family: monospace;">INMP441</span>
+                            </div>
+                            ${spectrumHtml}
+                            <div style="display:flex; justify-content:space-between; margin-top: 8px; font-size: 11px; color: #fff;">
+                                <span>Signal Level</span>
+                                <span style="font-family:monospace; color:${db > -45 ? 'var(--tft-accent)' : '#888'};">${db.toFixed(1)} dB</span>
+                            </div>
+                            <div style="height: 6px; width: 100%; background: #222; border-radius: 3px; margin-top: 4px; overflow:hidden;">
+                                <div style="height: 100%; width: ${pct}%; background: ${pct > 80 ? '#ef4444' : (pct > 50 ? '#eab308' : '#00e5ff')}; border-radius: 3px; transition: width 0.08s;"></div>
+                            </div>
+                        `;
+                    }
+                } else if (appMode === 0) { // GPS
+                    if (hdrTitle) hdrTitle.innerText = "GPS NAVIGATOR";
+                    if (ftrL) ftrL.innerText = "-";
+                    if (ftrM) ftrM.innerText = "MENU";
+                    if (ftrR) ftrR.innerText = "+";
+                    const lat = state.gpsLat || state.main_gpsLat || 0;
+                    const lon = state.gpsLon || state.main_gpsLon || 0;
+                    const spd = state.gpsSpeed || state.main_gpsSpeed || 0;
+                    const alt = state.gpsAlt || state.main_gpsAlt || 0;
+                    const sats = state.gpsSats || state.main_gpsSats || 0;
+                    if (body) {
+                        body.innerHTML = `
+                            <div style="font-family: monospace; font-size: 13px; color: var(--tft-accent); padding-top: 6px;">
+                                <div>LAT: ${lat.toFixed(5)}</div>
+                                <div>LON: ${lon.toFixed(5)}</div>
+                                <div style="margin-top:10px; font-size:16px; font-weight:bold; color:var(--tft-green);">SPD: ${spd.toFixed(1)} km/h</div>
+                                <div style="margin-top:6px;">ALT: ${alt.toFixed(1)} m</div>
+                                <div style="margin-top:14px; text-align:center; font-size:11px; color:#888;">SATS: ${sats}</div>
+                            </div>
+                        `;
+                    }
+                } else if (appMode === 1) { // IMU
+                    if (hdrTitle) hdrTitle.innerText = "IMU SENSOR";
+                    if (ftrL) ftrL.innerText = "CAL";
+                    if (ftrM) ftrM.innerText = "MENU";
+                    if (ftrR) ftrR.innerText = "ZERO";
+                    const pitch = state.imuPitch || state.main_imuPitch || 0;
+                    const roll = state.imuRoll || state.main_imuRoll || 0;
+                    const yaw = state.imuYaw || state.main_imuYaw || 0;
+                    if (body) {
+                        body.innerHTML = `
+                            <div style="text-align: center; margin-top: 6px;">
+                                <div style="font-size:11px; color:#888;">PITCH</div>
+                                <div style="font-size:20px; color:#0f0; font-weight:bold;">${Math.round(pitch)}°</div>
+                                <div style="font-size:11px; color:#888; margin-top:6px;">ROLL</div>
+                                <div style="font-size:20px; color:#0cf; font-weight:bold;">${Math.round(roll)}°</div>
+                                <div style="font-size:11px; color:#888; margin-top:6px;">YAW</div>
+                                <div style="font-size:20px; color:#f0f; font-weight:bold;">${Math.round(yaw)}°</div>
+                            </div>
+                        `;
+                    }
+                } else if (appMode === 17) {
+                    let title = "ESP-NOW LIVE VIDEO";
+                    if (hdrTitle) hdrTitle.innerText = title;
+                    if (ftrL) ftrL.innerText = "BACK";
+                    if (ftrM) ftrM.innerText = "PAUSE";
+                    if (ftrR) ftrR.innerText = "NEXT";
+                    const rxFps = (state.espnow_rx_fps || state.main_espnow_rx_fps || "14.5");
+                    const rxLoss = (state.espnow_rx_loss || state.main_espnow_rx_loss || "0%");
+                    if (body) {
+                        body.innerHTML = `
+                            <div style="background: #020813; color: #00d4ff; border: 1px solid rgba(0,212,255,0.4); border-radius: 4px; height: 100%; padding: 8px; font-family: 'Share Tech Mono', monospace; display: flex; flex-direction: column; justify-content: space-between;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0,212,255,0.2); padding-bottom: 4px;">
+                                    <span style="color: #00e676; font-weight: bold;"><i class="fas fa-satellite-dish"></i> LIVE RX</span>
+                                    <span style="color: #ffb703; font-size: 11px;">CH 1 (2.4G)</span>
+                                </div>
+                                <div style="text-align: center; margin: 4px 0;">
+                                    <div style="font-size: 26px; font-weight: bold; color: #fff; text-shadow: 0 0 10px rgba(0,212,255,0.7);">${rxFps} <span style="font-size: 13px; color: #00d4ff;">FPS</span></div>
+                                    <div style="font-size: 10px; color: #aaa; margin-top: 3px;">RES: 240x176 HQVGA</div>
+                                    <div style="font-size: 10px; color: #00e676; margin-top: 3px;"><i class="fas fa-check-circle"></i> PACKET LOSS: ${rxLoss}</div>
+                                </div>
+                                <div style="background: rgba(0,212,255,0.08); padding: 5px; border-radius: 3px; font-size: 9px; color: #8ecae6; text-align: center;">
+                                    <i class="fas fa-wifi" style="color: #00e676;"></i> STREAMING FROM XIAO CAM
+                                </div>
+                            </div>
+                        `;
+                    }
+                } else {
+                    let title = APP_MODE_NAMES[appMode] || MENU_NAMES[appMode] || ("MODULE " + appMode);
+                    if (hdrTitle) hdrTitle.innerText = title;
+                    if (ftrL) ftrL.innerText = "PREV";
+                    if (ftrM) ftrM.innerText = "SEL";
+                    if (ftrR) ftrR.innerText = "NEXT";
+                    if (body) {
+                        body.innerHTML = `
+                            <div style="background: #000; color: #0f0; border: 1px solid #333; height: 100%; padding: 6px; font-family: monospace; overflow: hidden; position: relative;">
+                                <div>&gt; INIT ${title}</div>
+                                <div>&gt; SYSTEM CHECK... OK</div>
+                                <div>&gt; SENSORS... READY</div>
+                                <div style="margin-top: 15px;">[ ${title} MODULE ACTIVE ]</div>
+                                <div style="position: absolute; bottom: 5px; left: 5px;">MODE ID: ${appMode}<span style="animation: blink 1s infinite;">_</span></div>
+                            </div>
+                        `;
+                    }
+                }
+            }
+        }
+
+        // Live Video Rotation & Fit Control
+        let camVideoRot = 0;
+        let camFitMode = "contain";
+        let sensorVF = 0;
+        let sensorHM = 0;
+
+        function cycleCamVideoRotation() {
+            camVideoRot = (camVideoRot + 90) % 360;
+            applyCamVideoTransforms();
+        }
+
+        function applyCamVideoTransforms() {
+            const img = document.getElementById('cam-feed-img');
+            const bigImg = document.querySelector('.modal-img');
+            const scale = (camVideoRot % 180 !== 0) ? 0.72 : 1.0;
+            if (img) img.style.transform = `rotate(${camVideoRot}deg) scale(${scale})`;
+            if (bigImg) bigImg.style.transform = `rotate(${camVideoRot}deg)`;
+        }
+
+        function toggleVfFitMode() {
+            const img = document.getElementById('cam-feed-img');
+            const btn = document.getElementById('btn-vf-fit');
+            if (camFitMode === "contain") {
+                camFitMode = "cover";
+                if (img) img.classList.add('fill-mode');
+                if (btn) btn.innerHTML = '<i class="fas fa-expand-alt"></i> Fill View';
+            } else {
+                camFitMode = "contain";
+                if (img) img.classList.remove('fill-mode');
+                if (btn) btn.innerHTML = '<i class="fas fa-compress-alt"></i> Fit View';
+            }
+        }
+
+        function toggleSensorFlip(param) {
+            if (param === 'VF') {
+                sensorVF = sensorVF === 0 ? 1 : 0;
+                setCamParam('VF', sensorVF);
+            } else if (param === 'HM') {
+                sensorHM = sensorHM === 0 ? 1 : 0;
+                setCamParam('HM', sensorHM);
+            }
+        }
+
+        function jumpCamScreen(screenId) {
+            const sId = parseInt(screenId);
+            if (sId === 9) {
+                toggleCamStreamState();
+            } else {
+                fetch('/cmd/cam/screen', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({screen: sId})
+                });
+            }
+        }
+
+        // Button Dispatchers
+        function sendCamBtn(val, state) {
+            fetch('/cmd/cam', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({cmd: "BTN_STATE", val: val, state: state})
+            });
+        }
+
+        function sendCamNav(action) {
+            fetch('/cmd/cam', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({cmd: "NAV", action: action})
+            });
+        }
+
+        function sendMainBtn(val, state) {
+            fetch('/cmd/main', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({cmd: "BTN_STATE", val: val, state: state})
+            });
+        }
+
+        function toggleDisplayFlip() {
+            const newRot = (camRotation === 0) ? 2 : 0;
+            fetch('/api/cam/set', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({param: "ROT", val: newRot})
+            })
+            .then(() => {
+                camRotation = newRot;
+                document.getElementById('cam-menu-rot').innerText = `Rotation: ${camRotation}° ${camRotation === 0 ? '(180° Inverted)' : '(Default)'}`;
+                camVideoRot = (camVideoRot + 180) % 360;
+                applyCamVideoTransforms();
+            });
+        }
+
+
+        function toggleCamRec() {
+            const nextCmd = camRecording ? "REC_STOP" : "REC_START";
+            fetch('/cmd/cam', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({cmd: nextCmd})
+            });
+        }
+
+        function toggleCamStreamState() {
+            if (typeof currentCamScreen !== 'undefined' && currentCamScreen === 5) {
+                sendCamNav('OK');
+                return;
+            }
+            fetch('/cmd/cam/stream/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            }).then(() => {
+                setTimeout(refreshCamStream, 350);
+            });
+        }
+
+        function refreshCamStream() {
+            const t = Date.now();
+            const vfImg = document.getElementById('cam-feed-img');
+            const modalImg = document.getElementById('modal-cam-img');
+            if (vfImg) vfImg.src = "/video_feed?t=" + t;
+            if (modalImg && document.getElementById('big-modal').style.display === 'flex') {
+                modalImg.src = "/video_feed?t=" + t;
+            }
+        }
+
+        function setCamParam(param, val) {
+            fetch('/api/cam/set', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({param: param, val: val})
+            });
+        }
+
+        function updateVal(id, val) {
+            document.getElementById(id).innerText = val;
+        }
+
+        function setAudioOutDev(devIdx) {
+            fetch('/api/audio/device', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({device: devIdx ? parseInt(devIdx) : null})
+            });
+        }
+
+        function setAudioGain(gain, target = 'cam') {
+            fetch('/api/audio/gain', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({gain: parseFloat(gain), target: target})
+            });
+        }
+
+        function toggleMainMic() {
+            // Pulse PREV button (val 2) to toggle usbMicEnabled on Main Device
+            sendMainBtn(2, 1);
+            setTimeout(() => sendMainBtn(2, 0), 100);
+        }
+
+        function toggleMainSpk() {
+            // Pulse NEXT button (val 3) to toggle usbSpeakerEnabled on Main Device
+            sendMainBtn(3, 1);
+            setTimeout(() => sendMainBtn(3, 0), 100);
+        }
+
+        function setMainMode(mode) {
+            fetch('/cmd/main', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({cmd: "SET_MODE", val: parseInt(mode)})
+            }).then(() => {
+                // If entering USB Audio mode (13), automatically trigger mic activation
+                if (parseInt(mode) === 13) {
+                    setTimeout(toggleMainMic, 450);
+                }
+            });
+        }
+
+        // Camera SD Card File Manager
+        function refreshCamFs() {
+            fetch('/api/fs/ls', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({path: camFsCurrentPath})
+            })
+            .then(r => r.json())
+            .then(res => {
+                if (res.error) return;
+                camFsCurrentPath = res.path || "/";
+                document.getElementById('fs-path-display').innerText = camFsCurrentPath;
+                let html = "";
+                const files = res.files || [];
+                files.sort((a,b) => b.isDir - a.isDir || a.name.localeCompare(b.name)).forEach(f => {
+                    let icon = f.isDir ? 'fa-folder' : 'fa-file-video';
+                    let size = f.isDir ? '-' : (f.size / 1024).toFixed(1) + ' KB';
+                    let action = f.isDir 
+                        ? `<button class="c-btn" style="padding: 3px 8px;" onclick="openCamFsDir('${f.name}')">Open</button>`
+                        : `<button class="c-btn" style="padding: 3px 8px;" onclick="downloadCamFile('${f.name}')"><i class="fas fa-download"></i></button>`;
+                    html += `
+                        <tr>
+                            <td><i class="fas ${icon}" style="color: var(--primary); margin-right: 8px;"></i>${f.name}</td>
+                            <td>${size}</td>
+                            <td>${action}</td>
+                        </tr>
+                    `;
+                });
+                if (files.length === 0) html = '<tr><td colspan="3" style="text-align:center; padding: 20px;">Directory is empty</td></tr>';
+                document.getElementById('cam-file-list').innerHTML = html;
+            });
+        }
+
+        function openCamFsDir(name) {
+            camFsCurrentPath += (camFsCurrentPath.endsWith('/') ? '' : '/') + name;
+            refreshCamFs();
+        }
+
+        function navCamFsUp() {
+            if (camFsCurrentPath === "/") return;
+            let parts = camFsCurrentPath.split("/").filter(p => p);
+            parts.pop();
+            camFsCurrentPath = "/" + parts.join("/");
+            refreshCamFs();
+        }
+
+        function downloadCamFile(name) {
+            let fullPath = (camFsCurrentPath.endsWith('/') ? camFsCurrentPath : camFsCurrentPath + '/') + name;
+            window.open('/api/fs/download?path=' + encodeURIComponent(fullPath), '_blank');
+        }
+
+        function captureSnapshot() {
+            window.open('/api/snapshot', '_blank');
+        }
+
+        // Tab Switching
+        function switchStudioTab(tabId) {
+            document.querySelectorAll('.s-tab').forEach(t => t.classList.remove('active'));
+            event.currentTarget.classList.add('active');
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            document.getElementById('tab-' + tabId).classList.add('active');
+            if (tabId === 'files') refreshCamFs();
+        }
+
+        // Big Monitor Modal
+        function openBigMonitor() {
+            const modal = document.getElementById('big-modal');
+            const modalImg = document.getElementById('modal-cam-img');
+            if (modalImg) modalImg.src = "/video_feed?t=" + Date.now();
+            if (modal) modal.style.display = 'flex';
+        }
+        function closeBigMonitor() {
+            const modal = document.getElementById('big-modal');
+            const modalImg = document.getElementById('modal-cam-img');
+            if (modal) modal.style.display = 'none';
+            if (modalImg) modalImg.src = "";
+        }
+
+        let streamErrRetry = null;
+        function handleStreamErr(img) {
+            if (!img) return;
+            if (streamErrRetry) clearTimeout(streamErrRetry);
+            streamErrRetry = setTimeout(() => {
+                if (img) img.src = "/video_feed?t=" + Date.now();
+            }, 1200);
+        }
+
+        function copyRawJson() {
+            const text = document.getElementById('raw-json-display').innerText;
+            navigator.clipboard.writeText(text);
+            alert("Raw JSON copied to clipboard!");
+        }
+
+        // Global Keyboard Handler for Camera Navigation
+        window.addEventListener('keydown', function(e) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            switch(e.key.toLowerCase()) {
+                case 'arrowup':
+                case 'w':
+                    sendCamBtn(0, 1);
+                    break;
+                case 'arrowdown':
+                case 's':
+                    sendCamBtn(1, 1);
+                    break;
+                case 'enter':
+                case ' ':
+                    sendCamBtn(4, 1);
+                    break;
+                case 'escape':
+                case 'b':
+                    sendCamBtn(5, 1);
+                    break;
+                case 'm':
+                    sendCamNav('MENU');
+                    break;
+                case 'r':
+                    toggleCamRec();
+                    break;
+                case 'f':
+                    toggleDisplayFlip();
+                    break;
+                case 'v':
+                    toggleCamStreamState();
+                    break;
+            }
+        });
+
+        window.addEventListener('keyup', function(e) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            switch(e.key.toLowerCase()) {
+                case 'arrowup':
+                case 'w':
+                    sendCamBtn(0, 0);
+                    break;
+                case 'arrowdown':
+                case 's':
+                    sendCamBtn(1, 0);
+                    break;
+                case 'enter':
+                case ' ':
+                    sendCamBtn(4, 0);
+                    break;
+                case 'escape':
+                case 'b':
+                    sendCamBtn(5, 0);
+                    break;
+            }
+        });
+
+        // Auto-start stream on load
+        window.addEventListener('DOMContentLoaded', () => {
+            ensureStreamListening();
+        });
+    </script>
+</body>
+</html>

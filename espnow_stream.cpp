@@ -13,6 +13,7 @@
 // ══════════════════════════════════════════════════════════════════
 #include "espnow_stream.h"
 #include "camera_config.h"
+#include "audio.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -45,7 +46,7 @@ static uint8_t s_pkt[ESPNOW_MAX_PACKET];
 // Broadcast MAC00
 static const uint8_t BROADCAST_MAC[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
-uint32_t g_streamFrameIntervalMs = 80;   // ~12 FPS — matches HQVGA Q10 send time (8 chunks × 9ms = 72ms)
+uint32_t g_streamFrameIntervalMs = 40;   // ~25 FPS target
 
 // ─── Send-done handshake ──────────────────────────────────────────
 // Tracks whether the WiFi driver has finished sending the last packet.
@@ -73,9 +74,12 @@ static void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len
     if (len < 1) return;
     uint8_t ptype = data[0];
 
-    if (ptype == VID_HANDSHAKE_ACK && len >= 7) {
-        // Payload bytes 1-6: receiver's MAC address
-        memcpy(s_receiverMAC, data + 1, 6);
+    if (ptype == VID_HANDSHAKE_ACK) {
+        if (len >= 7) {
+            memcpy(s_receiverMAC, data + 1, 6);
+        } else if (info && info->src_addr) {
+            memcpy(s_receiverMAC, info->src_addr, 6);
+        }
         s_stats.receiverFound = true;
         memcpy(s_stats.receiverMAC, s_receiverMAC, 6);
         s_ackReceived = true;
@@ -89,7 +93,11 @@ static void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len
 void espnow_stream_init() {
     if (s_initialized) return;
 
-    // WiFi must already be WIFI_AP_STA — set by main .ino
+    // Use lightweight WIFI_STA without AP beacon timer to avoid Core 0 WDT starvation
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+
     if (esp_now_init() != ESP_OK) {
         Serial.println("[STREAM] ESP-NOW init FAILED");
         s_state = STREAM_ERROR;
@@ -116,6 +124,7 @@ void espnow_stream_init() {
 void espnow_stream_deinit(bool resumeCamera) {
     if (!s_initialized) return;
     espnow_stream_stop(resumeCamera);
+    audio_mic_deinit();
     esp_now_unregister_send_cb();
     esp_now_unregister_recv_cb();
     esp_now_deinit();
@@ -126,8 +135,17 @@ void espnow_stream_deinit(bool resumeCamera) {
 
 // ─── espnow_stream_start ──────────────────────────────────────────
 void espnow_stream_start() {
-    if (!s_initialized) return;
+    if (!s_initialized) {
+        espnow_stream_init();
+    }
+    if (!s_initialized) {
+        Serial.println("[STREAM] Cannot start: init failed");
+        return;
+    }
     if (s_state == STREAM_CONNECTED || s_state == STREAM_SEARCHING) return;
+
+    // Initialize microphone so PDM samples begin filling ring buffer
+    audio_mic_init();
 
     // Begin scanning for receiver
     s_state             = STREAM_SEARCHING;
@@ -159,6 +177,7 @@ void espnow_stream_stop(bool resumeCamera) {
     }
     s_state     = STREAM_IDLE;
     s_peerAdded = false;
+    audio_mic_deinit();
     Serial.println("[STREAM] Stopped");
 }
 
@@ -226,12 +245,18 @@ void espnow_stream_tick() {
         // Check for new ACK (receiver re-confirmed)
         if (s_ackReceived) s_ackReceived = false;
 
+        // Pump available audio before checking frame timer
+        espnow_stream_audio_pump();
+
         if (now - s_lastFrameMs >= g_streamFrameIntervalMs) {
             extern CamSettings camCfg;
             if (!captureAndStream(camCfg)) {
                 s_stats.droppedFrames++;
             }
             s_lastFrameMs = now;
+
+            // Pump audio immediately after frame transmission
+            espnow_stream_audio_pump();
         }
     }
 }
@@ -301,7 +326,11 @@ static void switchCamToJpeg(const CamSettings& cfg) {
     // camera_init_extreme calls set_aec2(0) which overrides jpeg_quality
     // on OV3660, causing frames to be tiny (~2400B) regardless of quality setting.
     // Standard init respects cfg.jpeg_quality correctly.
-    camera_init(streamCfg);
+    if (!camera_init(streamCfg)) {
+        Serial.println("[STREAM] Camera init JPEG failed!");
+        s_state = STREAM_ERROR;
+        return;
+    }
 
     // Force quality on sensor register AFTER init
     sensor_t* sx = esp_camera_sensor_get();
@@ -321,6 +350,10 @@ static void switchCamToJpeg(const CamSettings& cfg) {
     s_camJpegMode = true;
     Serial.printf("[STREAM] Camera → JPEG mode (HQVGA 240x176, Q%d) | camTask paused\n",
                   STREAM_JPEG_QUALITY);
+
+    // Flush any stale audio from ring buffer so receiver gets real-time audio
+    int16_t flushBuf[320];
+    while (audio_read_mic(flushBuf, 320) > 0) {}
 }
 
 static void switchCamToRgb565(const CamSettings& cfg, bool resumeCamera) {
@@ -399,10 +432,13 @@ static bool captureAndStream(const CamSettings& cfg) {
 
         // Wait for this chunk's callback (max 8ms)
         t = millis();
-        while (!s_lastSendDone && millis() - t < 8) delayMicroseconds(100);
+        while (!s_lastSendDone && millis() - t < 8) delayMicroseconds(50);
 
-        // Mandatory gap — WiFi task needs time to drain TX queue
+        #if CHUNK_DELAY_MS > 0
         delay(CHUNK_DELAY_MS);
+        #else
+        delayMicroseconds(50);
+        #endif
     }
 
     // ── VIDEO_FRAME_END ────────────────────────────────────────────
@@ -471,4 +507,77 @@ static void sendFrameEnd() {
     s_pkt[0] = VID_FRAME_END;
     memcpy(s_pkt + 1, &s_frameID, 2);
     esp_now_send(s_receiverMAC, s_pkt, 3);
+}
+
+// ─── G.711 u-law compression & Audio Streaming ─────────────────────
+static inline uint8_t linear2ulaw(int16_t pcm_val) {
+    int16_t mask;
+    int16_t seg;
+    uint8_t uval;
+
+    if (pcm_val < 0) {
+        pcm_val = -pcm_val;
+        mask = 0x7F;
+    } else {
+        mask = 0xFF;
+    }
+    if (pcm_val > 32635) pcm_val = 32635;
+    pcm_val += 0x84;
+
+    /* Determine segment */
+    if (pcm_val >= 0x4000)      seg = 7;
+    else if (pcm_val >= 0x2000) seg = 6;
+    else if (pcm_val >= 0x1000) seg = 5;
+    else if (pcm_val >= 0x0800) seg = 4;
+    else if (pcm_val >= 0x0400) seg = 3;
+    else if (pcm_val >= 0x0200) seg = 2;
+    else if (pcm_val >= 0x0100) seg = 1;
+    else                        seg = 0;
+
+    /* Combine sign, segment, and mantissa */
+    uval = (seg << 4) | ((pcm_val >> (seg + 3)) & 0x0F);
+    return (uval ^ mask);
+}
+
+// Static audio buffers (160 samples @ 8kHz = 20ms chunk = 165 bytes packet)
+static uint8_t s_audioPkt[165];
+static int16_t s_pcm16In[320];
+
+void espnow_stream_audio_pump() {
+    if (s_state != STREAM_CONNECTED || !s_peerAdded) return;
+
+    // Drain up to 2 chunks (40ms) per call to stay ahead
+    for (int chunk = 0; chunk < 2; chunk++) {
+        // Read 320 samples (640 bytes) of 16kHz PCM from ring buffer
+        size_t bytesRead = audio_read_mic(s_pcm16In, 320);
+        if (bytesRead < 320 * sizeof(int16_t)) {
+            break; // Not enough samples yet
+        }
+
+        s_audioPkt[0] = VID_AUDIO;
+        uint32_t now = millis();
+        memcpy(s_audioPkt + 1, &now, 4);
+
+        for (int i = 0; i < 160; i++) {
+            int32_t s0 = s_pcm16In[2 * i];
+            int32_t s1 = s_pcm16In[2 * i + 1];
+            int32_t s_avg = (s0 + s1) / 2;
+
+            // Noise gate: suppress PDM mic idle noise (typically 300-500 LSB).
+            // Samples below this threshold are zeroed before G.711 encoding,
+            // which eliminates the "jhirjhir" static during silent periods.
+            if (s_avg > -600 && s_avg < 600) s_avg = 0;
+
+            // No extra digital gain -- PDM mic output is already usable for G.711.
+            if (s_avg >  32635)  s_avg = 32635;
+            if (s_avg < -32635) s_avg = -32635;
+
+            s_audioPkt[5 + i] = linear2ulaw((int16_t)s_avg);
+        }
+
+        s_lastSendDone = false;
+        esp_now_send(s_receiverMAC, s_audioPkt, 165);
+        uint32_t t = millis();
+        while (!s_lastSendDone && (millis() - t < 8)) delayMicroseconds(50);
+    }
 }
