@@ -105,12 +105,17 @@ main_state = {
 
 # Video state
 latest_jpeg_frame = None
+latest_raw_jpeg_frame = None
 frame_lock = threading.Lock()
 frame_condition = threading.Condition(frame_lock)
+raw_frame_lock = threading.Lock()
+raw_frame_condition = threading.Condition(raw_frame_lock)
+new_raw_frame_available = False
 video_frame_count = 0
 fps_measure_time = time.time()
 last_video_frame_time = 0.0
 current_video_fps = 0
+
 
 vcam = None
 vcam_enabled = False
@@ -150,19 +155,25 @@ except Exception:
 isp_config = {
     "enabled": True,
     "preset": "logitech_pro",
-    "sharpness": 1.2,
+    "sharpness": 1.0,
     "clahe": True,
-    "clahe_clip": 2.0,
+    "clahe_clip": 1.8,
     "denoise": True,
-    "saturation": 1.25,
-    "brightness": 4,
-    "contrast": 1.12,
+    "saturation": 1.2,
+    "brightness": 2,
+    "contrast": 1.08,
     "auto_wb": True,
-    "gamma": 1.05
+    "gamma": 1.02
 }
 isp_lock = threading.Lock()
 
+# Temporal smoothed AWB coefficients (eliminates frame-to-frame color flickering)
+awb_smooth_kb = 1.0
+awb_smooth_kg = 1.0
+awb_smooth_kr = 1.0
+
 def apply_pro_isp(frame_bgr):
+    global awb_smooth_kb, awb_smooth_kg, awb_smooth_kr
     with isp_lock:
         if not isp_config.get("enabled", True):
             return frame_bgr
@@ -171,25 +182,31 @@ def apply_pro_isp(frame_bgr):
     try:
         out = frame_bgr
 
-        # 1. Auto White Balance (Gray World algorithm with safety clipping)
+        # 1. Temporal-Smoothed Auto White Balance (Zero Flicker / Cinematic Color Adaptation)
         if cfg.get("auto_wb", True):
             b, g, r = cv2.split(out)
-            b_avg = np.mean(b) + 1e-5
-            g_avg = np.mean(g) + 1e-5
-            r_avg = np.mean(r) + 1e-5
+            b_avg = float(np.mean(b)) + 1e-5
+            g_avg = float(np.mean(g)) + 1e-5
+            r_avg = float(np.mean(r)) + 1e-5
             k = (b_avg + g_avg + r_avg) / 3.0
-            kb = np.clip(k / b_avg, 0.75, 1.35)
-            kg = np.clip(k / g_avg, 0.75, 1.35)
-            kr = np.clip(k / r_avg, 0.75, 1.35)
+            target_kb = float(np.clip(k / b_avg, 0.80, 1.25))
+            target_kg = float(np.clip(k / g_avg, 0.80, 1.25))
+            target_kr = float(np.clip(k / r_avg, 0.80, 1.25))
+
+            # Exponential Moving Average: smoothly adapts over ~15 frames, eliminating any flicker
+            awb_smooth_kb = 0.93 * awb_smooth_kb + 0.07 * target_kb
+            awb_smooth_kg = 0.93 * awb_smooth_kg + 0.07 * target_kg
+            awb_smooth_kr = 0.93 * awb_smooth_kr + 0.07 * target_kr
+
             out = cv2.merge([
-                np.clip(b * kb, 0, 255).astype(np.uint8),
-                np.clip(g * kg, 0, 255).astype(np.uint8),
-                np.clip(r * kr, 0, 255).astype(np.uint8)
+                np.clip(b * awb_smooth_kb, 0, 255).astype(np.uint8),
+                np.clip(g * awb_smooth_kg, 0, 255).astype(np.uint8),
+                np.clip(r * awb_smooth_kr, 0, 255).astype(np.uint8)
             ])
 
-        # 2. Fast Sensor Chroma / Grain Denoising
+        # 2. Fast Sensor Chroma / Grain Denoising (Zero Edge-Popping)
         if cfg.get("denoise", True):
-            out = cv2.bilateralFilter(out, d=5, sigmaColor=35, sigmaSpace=35)
+            out = cv2.GaussianBlur(out, (3, 3), 0.6)
 
         # 3. Dynamic Range Expansion (CLAHE) & Contrast / Brightness
         if cfg.get("clahe", True) or cfg.get("saturation", 1.0) != 1.0 or cfg.get("contrast", 1.0) != 1.0 or cfg.get("brightness", 0) != 0:
@@ -197,7 +214,7 @@ def apply_pro_isp(frame_bgr):
             l, a, b_ch = cv2.split(lab)
 
             if cfg.get("clahe", True):
-                clip = float(cfg.get("clahe_clip", 2.0))
+                clip = float(cfg.get("clahe_clip", 1.8))
                 clahe_obj = cv2.createCLAHE(clipLimit=clip, tileGridSize=(8, 8))
                 l = clahe_obj.apply(l)
 
@@ -217,11 +234,12 @@ def apply_pro_isp(frame_bgr):
                 hsv[:, :, 1] = np.clip(hsv[:, :, 1] * sat, 0, 255)
                 out = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-        # 4. Adaptive Edge Sharpening (Unsharp Mask)
+        # 4. Smart Edge Sharpening (Unsharp Mask - Stable, No Shimmer)
         sharp = float(cfg.get("sharpness", 0.0))
         if sharp > 0:
-            blurred = cv2.GaussianBlur(out, (0, 0), sigmaX=2.0)
-            out = cv2.addWeighted(out, 1.0 + sharp, blurred, -sharp, 0)
+            blurred = cv2.GaussianBlur(out, (0, 0), sigmaX=1.5)
+            s_weight = min(1.0, sharp * 0.45)
+            out = cv2.addWeighted(out, 1.0 + s_weight, blurred, -s_weight, 0)
 
         # 5. Gamma Correction (Studio Lighting Curve)
         gamma = float(cfg.get("gamma", 1.0))
@@ -233,6 +251,64 @@ def apply_pro_isp(frame_bgr):
         return out
     except Exception:
         return frame_bgr
+
+def isp_processor_worker():
+    """
+    Dedicated background worker for Pro ISP.
+    Completely decoupled from the Serial RX thread to guarantee ZERO UART packet loss
+    and silky smooth, flicker-free rendering.
+    """
+    global latest_jpeg_frame, last_video_frame_time, vcam, new_raw_frame_available
+    while True:
+        raw_bytes = None
+        with raw_frame_condition:
+            while not new_raw_frame_available:
+                if not raw_frame_condition.wait(timeout=0.1):
+                    break
+            if new_raw_frame_available and latest_raw_jpeg_frame is not None:
+                raw_bytes = latest_raw_jpeg_frame
+                new_raw_frame_available = False
+
+        if raw_bytes is None:
+            time.sleep(0.005)
+            continue
+
+        final_bytes = raw_bytes
+        frame_bgr = None
+
+        if isp_config.get("enabled", True):
+            try:
+                img_arr = np.frombuffer(raw_bytes, dtype=np.uint8)
+                frame_bgr = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+                if frame_bgr is not None:
+                    enhanced_bgr = apply_pro_isp(frame_bgr)
+                    ok, enc = cv2.imencode('.jpg', enhanced_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+                    if ok:
+                        final_bytes = enc.tobytes()
+            except Exception:
+                final_bytes = raw_bytes
+
+        with frame_condition:
+            latest_jpeg_frame = final_bytes
+            last_video_frame_time = time.time()
+            frame_condition.notify_all()
+
+        # Virtual Camera forward (using the enhanced frame!)
+        if vcam_enabled and HAS_PYVIRTUALCAM:
+            try:
+                if frame_bgr is None:
+                    img_arr = np.frombuffer(final_bytes, dtype=np.uint8)
+                    frame_bgr = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+                if frame_bgr is not None:
+                    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                    h, w, _ = frame_rgb.shape
+                    if vcam is None or vcam.width != w or vcam.height != h:
+                        if vcam: vcam.close()
+                        vcam = pyvirtualcam.Camera(width=w, height=h, fps=30, fmt=pyvirtualcam.PixelFormat.RGB)
+                    vcam.send(frame_rgb)
+            except Exception:
+                pass
+
 
 
 def create_log_bins(n_bins, n_fft, sample_rate):
@@ -441,26 +517,11 @@ def serial_cam_worker():
                     raw_jpeg_bytes = bytes(buf[8 : 8 + frame_len])
                     buf = buf[8 + frame_len :]
 
-                    final_jpeg_bytes = raw_jpeg_bytes
-                    frame_bgr = None
-
-                    # Pro ISP Hardware-Accelerated Processing
-                    if isp_config.get("enabled", True):
-                        try:
-                            img_arr = np.frombuffer(raw_jpeg_bytes, dtype=np.uint8)
-                            frame_bgr = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
-                            if frame_bgr is not None:
-                                frame_bgr = apply_pro_isp(frame_bgr)
-                                ok, enc = cv2.imencode('.jpg', frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-                                if ok:
-                                    final_jpeg_bytes = enc.tobytes()
-                        except Exception:
-                            pass
-
-                    with frame_condition:
-                        latest_jpeg_frame = final_jpeg_bytes
-                        last_video_frame_time = time.time()
-                        frame_condition.notify_all()
+                    # Instant non-blocking handoff to dedicated ISP thread
+                    with raw_frame_condition:
+                        latest_raw_jpeg_frame = raw_jpeg_bytes
+                        new_raw_frame_available = True
+                        raw_frame_condition.notify()
 
                     video_frame_count += 1
                     now = time.time()
@@ -469,22 +530,6 @@ def serial_cam_worker():
                         cam_state["fps"] = int(round(current_video_fps))
                         video_frame_count = 0
                         fps_measure_time = now
-
-                    # Virtual Camera forward (using the enhanced frame!)
-                    if vcam_enabled and HAS_PYVIRTUALCAM:
-                        try:
-                            if frame_bgr is None:
-                                img_arr = np.frombuffer(final_jpeg_bytes, dtype=np.uint8)
-                                frame_bgr = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
-                            if frame_bgr is not None:
-                                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                                h, w, _ = frame_rgb.shape
-                                if vcam is None or vcam.width != w or vcam.height != h:
-                                    if vcam: vcam.close()
-                                    vcam = pyvirtualcam.Camera(width=w, height=h, fps=30, fmt=pyvirtualcam.PixelFormat.RGB)
-                                vcam.send(frame_rgb)
-                        except Exception as ve:
-                            pass
 
                 # ── 2. Audio PCM Packet ──────────────────────────────────────
                 elif packet_type == 'AUD':
@@ -581,6 +626,7 @@ def serial_cam_worker():
             time.sleep(0.5)
 
 threading.Thread(target=serial_cam_worker, daemon=True).start()
+threading.Thread(target=isp_processor_worker, daemon=True).start()
 
 # ─── Thread 2: MAIN DEVICE Serial Worker (Dedicated to Main Tracker & RF) ───
 def serial_main_worker():
@@ -953,9 +999,9 @@ def api_isp_preset():
     preset = (request.json or {}).get("preset", "logitech_pro")
     presets = {
         "logitech_pro": {
-            "enabled": True, "sharpness": 1.2, "clahe": True, "clahe_clip": 2.0,
-            "denoise": True, "saturation": 1.25, "brightness": 4, "contrast": 1.12,
-            "auto_wb": True, "gamma": 1.05
+            "enabled": True, "sharpness": 1.0, "clahe": True, "clahe_clip": 1.8,
+            "denoise": True, "saturation": 1.2, "brightness": 2, "contrast": 1.08,
+            "auto_wb": True, "gamma": 1.02
         },
         "studio_cinema": {
             "enabled": True, "sharpness": 1.5, "clahe": True, "clahe_clip": 2.8,
