@@ -108,13 +108,12 @@ latest_jpeg_frame = None
 latest_raw_jpeg_frame = None
 frame_lock = threading.Lock()
 frame_condition = threading.Condition(frame_lock)
-raw_frame_lock = threading.Lock()
-raw_frame_condition = threading.Condition(raw_frame_lock)
-new_raw_frame_available = False
+raw_frame_queue = queue.Queue(maxsize=1)
 video_frame_count = 0
 fps_measure_time = time.time()
 last_video_frame_time = 0.0
 current_video_fps = 0
+
 
 
 vcam = None
@@ -255,22 +254,16 @@ def apply_pro_isp(frame_bgr):
 def isp_processor_worker():
     """
     Dedicated background worker for Pro ISP.
-    Completely decoupled from the Serial RX thread to guarantee ZERO UART packet loss
-    and silky smooth, flicker-free rendering.
+    Reads from thread-safe raw_frame_queue and updates latest_jpeg_frame.
     """
-    global latest_jpeg_frame, last_video_frame_time, vcam, new_raw_frame_available
+    global latest_jpeg_frame, last_video_frame_time, vcam
     while True:
-        raw_bytes = None
-        with raw_frame_condition:
-            while not new_raw_frame_available:
-                if not raw_frame_condition.wait(timeout=0.1):
-                    break
-            if new_raw_frame_available and latest_raw_jpeg_frame is not None:
-                raw_bytes = latest_raw_jpeg_frame
-                new_raw_frame_available = False
+        try:
+            raw_bytes = raw_frame_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
 
-        if raw_bytes is None:
-            time.sleep(0.005)
+        if not raw_bytes:
             continue
 
         final_bytes = raw_bytes
@@ -308,6 +301,7 @@ def isp_processor_worker():
                     vcam.send(frame_rgb)
             except Exception:
                 pass
+
 
 
 
@@ -517,11 +511,20 @@ def serial_cam_worker():
                     raw_jpeg_bytes = bytes(buf[8 : 8 + frame_len])
                     buf = buf[8 + frame_len :]
 
-                    # Instant non-blocking handoff to dedicated ISP thread
-                    with raw_frame_condition:
-                        latest_raw_jpeg_frame = raw_jpeg_bytes
-                        new_raw_frame_available = True
-                        raw_frame_condition.notify()
+                    # Immediately update latest_jpeg_frame if ISP is disabled, or queue for ISP
+                    if not isp_config.get("enabled", True):
+                        with frame_condition:
+                            latest_jpeg_frame = raw_jpeg_bytes
+                            last_video_frame_time = time.time()
+                            frame_condition.notify_all()
+                    else:
+                        try:
+                            raw_frame_queue.put_nowait(raw_jpeg_bytes)
+                        except queue.Full:
+                            try: raw_frame_queue.get_nowait()
+                            except queue.Empty: pass
+                            try: raw_frame_queue.put_nowait(raw_jpeg_bytes)
+                            except queue.Full: pass
 
                     video_frame_count += 1
                     now = time.time()
