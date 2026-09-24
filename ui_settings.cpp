@@ -3,9 +3,11 @@
 //  All screen draw routines + navigation (video only)
 // ══════════════════════════════════════════════════════════════════
 #include "ui_settings.h"
+#include "power_manager.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+
 
 // ─── Main Menu Table ──────────────────────────────────────────────
 static const MainMenuItem MM_ITEMS[MAIN_MENU_COUNT] = {
@@ -164,6 +166,11 @@ void ui_draw_main_menu(TFT_eSprite& sp, UIState& ui) {
     sp.setTextColor(C_ACCENT2, C_PANEL);
     sp.setCursor(6, 4);
     sp.print("MENU");
+    char hbuf[24];
+    snprintf(hbuf, sizeof(hbuf), "%luM %.0fC", (unsigned long)power_manager_get_cpu_freq(), temperatureRead());
+    sp.setTextColor(C_GREY, C_PANEL);
+    sp.drawString(hbuf, DISP_W - 55, 4);
+
 
     int16_t scrollY = 16;
     int16_t areaH   = MENU_H - scrollY - 14;
@@ -658,39 +665,123 @@ void ui_draw_qr_screen(TFT_eSprite& sp, const UIState& ui,
 }
 
 // ─── USB Webcam Screen ──────────────────────────────────────────────
-void ui_draw_usb_webcam(TFT_eSprite& sp, const UIState& ui, bool isStreaming) {
-    sp.fillSprite(C_BG);
-    sp.fillRect(0,0,DISP_W,14,C_PANEL);
-    sp.setTextColor(0x07FF,C_PANEL);
-    sp.setTextSize(1);
-    sp.setCursor(5,3);
-    sp.print("USB WEBCAM MODE");
+void ui_draw_usb_webcam(TFT_eSprite& spMenu, TFT_eSprite& spFeed, const UIState& ui,
+                        bool isStreaming, uint32_t fps, const CamSettings& cs, bool audioActive) {
+    // ── Feed Sprite (Top 172x172) ──────────────────────────────────
+    spFeed.fillSprite(C_BG);
 
-    sp.setTextColor(C_WHITE,C_BG);
-    sp.setTextSize(1);
-    sp.setCursor(10,24);
-    sp.print(isStreaming ? "STREAMING TO PC" : "IDLE");
-
+    // Header bar
+    spFeed.fillRect(0, 0, DISP_W, 16, C_PANEL);
+    bool blink = ((millis() / 400) & 1);
     if (isStreaming) {
-        sp.setTextColor(C_ACCENT2,C_BG);
-        sp.setCursor(10,40);
-        sp.print("Run pc_webcam.py script");
-        bool blink = ((millis()/400)&1);
-        sp.fillCircle(14, 58, 4, blink ? C_RED : C_DKGREY);
-        sp.setTextColor(blink?C_RED:C_GREY,C_BG);
-        sp.setCursor(24, 54);
-        sp.print("TX Active");
+        spFeed.fillCircle(8, 8, 3, blink ? C_RED : C_DKGREY);
+        spFeed.setTextColor(C_WHITE, C_PANEL);
+        spFeed.setTextSize(1);
+        spFeed.drawString("LIVE USB STREAM", 16, 4);
     } else {
-        sp.setTextColor(C_GREY,C_BG);
-        sp.setCursor(10,40);
-        sp.print("Press OK to start stream");
+        spFeed.fillCircle(8, 8, 3, C_GREY);
+        spFeed.setTextColor(C_LTGREY, C_PANEL);
+        spFeed.setTextSize(1);
+        spFeed.drawString("USB WEBCAM READY", 16, 4);
     }
 
-    sp.fillRect(0,MENU_H-14,DISP_W,14,C_PANEL);
-    sp.setTextColor(C_DKGREY,C_PANEL);
-    sp.setTextSize(1);
-    sp.setCursor(4,MENU_H-10);
-    sp.print(isStreaming ? "OK:stop  HOLD:back" : "OK:start  HOLD:back");
-    sp.pushSprite(0,MENU_Y);
+    if (isStreaming) {
+        // Big FPS Display in center
+        char fpsNum[16];
+        snprintf(fpsNum, sizeof(fpsNum), "%lu", (unsigned long)fps);
+        spFeed.setTextColor(C_GREEN, C_BG);
+        spFeed.setTextDatum(MC_DATUM);
+        spFeed.drawString(fpsNum, DISP_W / 2 - 15, 60, 6);
+        spFeed.setTextColor(C_ACCENT2, C_BG);
+        spFeed.setTextSize(1);
+        spFeed.drawString("FPS", DISP_W / 2 + 35, 65);
+
+        // Resolution & Quality Card
+        spFeed.fillRect(8, 98, DISP_W - 16, 32, C_CARD);
+        spFeed.drawRoundRect(8, 98, DISP_W - 16, 32, 4, C_DIVIDER);
+        spFeed.setTextDatum(TL_DATUM);
+        spFeed.setTextColor(C_ACCENT, C_CARD);
+        char resBuf[32];
+        snprintf(resBuf, sizeof(resBuf), "%s", FRAME_OPTIONS[cs.wcFrameIdx].label);
+        spFeed.drawString(resBuf, 14, 102);
+
+        char qBuf[32];
+        snprintf(qBuf, sizeof(qBuf), "Quality: Q%d", cs.quality);
+        spFeed.setTextColor(C_LTGREY, C_CARD);
+        spFeed.drawString(qBuf, 14, 116);
+
+        // Audio Status badge
+        if (audioActive) {
+            spFeed.fillRect(8, 136, DISP_W - 16, 18, 0x0A24);
+            spFeed.setTextColor(C_GREEN, 0x0A24);
+            spFeed.drawString("MIC: 16kHz I2S [TX]", 14, 140);
+        } else {
+            spFeed.fillRect(8, 136, DISP_W - 16, 18, C_PANEL);
+            spFeed.setTextColor(C_GREY, C_PANEL);
+            spFeed.drawString("MIC: MUTED", 14, 140);
+        }
+    } else {
+        spFeed.setTextDatum(MC_DATUM);
+        spFeed.setTextColor(C_ACCENT2, C_BG);
+        spFeed.setTextSize(2);
+        spFeed.drawString("STANDBY", DISP_W / 2, 60);
+
+        spFeed.setTextSize(1);
+        spFeed.setTextColor(C_WHITE, C_BG);
+        spFeed.drawString("Connect to PC", DISP_W / 2, 95);
+        spFeed.setTextColor(C_GREY, C_BG);
+        spFeed.drawString("Run unified_dashboard.py", DISP_W / 2, 115);
+    }
+    spFeed.setTextDatum(TL_DATUM);
+    spFeed.pushSprite(0, FEED_Y);
+
+    // ── Menu Sprite (Bottom 172x144) ───────────────────────────────
+    spMenu.fillSprite(C_BG);
+    spMenu.fillRect(0, 0, DISP_W, 14, C_PANEL);
+    spMenu.setTextColor(0x07FF, C_PANEL);
+    spMenu.setTextSize(1);
+    spMenu.setCursor(5, 3);
+    spMenu.print("SYSTEM TELEMETRY");
+
+    const PowerStats& pwr = power_manager_get_stats();
+    char buf[48];
+
+    // Live FPS & Frequency
+    spMenu.setTextColor(C_WHITE, C_BG);
+    spMenu.setCursor(6, 20);
+    snprintf(buf, sizeof(buf), "FPS: %lu fps (Stream)", (unsigned long)fps);
+    spMenu.print(buf);
+
+    // CPU Clock & Power Profile
+    spMenu.setTextColor(C_ACCENT, C_BG);
+    spMenu.setCursor(6, 36);
+    snprintf(buf, sizeof(buf), "CPU: %lu MHz (%s)", (unsigned long)pwr.currentFreqMhz, pwr.profileName);
+    spMenu.print(buf);
+
+    // Temperature with color
+    float coreT = pwr.coreTempC;
+    uint16_t tc = (coreT < 55.0f) ? C_GREEN : (coreT < 70.0f) ? C_ORANGE : C_RED;
+    spMenu.setTextColor(tc, C_BG);
+    spMenu.setCursor(6, 52);
+    snprintf(buf, sizeof(buf), "Temp: %.0f C  %s", coreT, pwr.isThrottled ? "[THROTTLED]" : "[OK]");
+    spMenu.print(buf);
+
+    // Memory stats
+    spMenu.setTextColor(C_LTGREY, C_BG);
+    spMenu.setCursor(6, 68);
+    snprintf(buf, sizeof(buf), "Heap: %u KB", (unsigned int)(esp_get_free_heap_size() / 1024));
+    spMenu.print(buf);
+
+    spMenu.setCursor(6, 84);
+    snprintf(buf, sizeof(buf), "PSRAM: %.1f MB", (float)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / (1024.0f * 1024.0f)));
+    spMenu.print(buf);
+
+    // Footer
+    spMenu.fillRect(0, MENU_H - 18, DISP_W, 18, C_PANEL);
+    spMenu.setTextColor(C_DKGREY, C_PANEL);
+    spMenu.setCursor(4, MENU_H - 13);
+    spMenu.print(isStreaming ? "OK: Stop  HOLD: Back" : "OK: Start HOLD: Back");
+
+    spMenu.pushSprite(0, MENU_Y);
 }
 

@@ -51,11 +51,11 @@ ser_cam_lock = threading.Lock()
 is_cam_connected = False
 cam_port_name = "COM9"
 
-# Port 2: MAIN TRACKER DEVICE (e.g. COM18)
+# Port 2: MAIN TRACKER DEVICE (e.g. COM12 - Walkie-Talkie)
 ser_main = None
 ser_main_lock = threading.Lock()
 is_main_connected = False
-main_port_name = None
+main_port_name = "COM12"
 
 pending_responses = {}
 
@@ -419,8 +419,18 @@ def serial_cam_worker():
                             if t == "STATE":
                                 for k, v in data.items():
                                     cam_state[k] = v
+                            elif t in ("PWR_PROFILE_CHANGE", "PWR_INFO"):
+                                if "cpuMhz" in data:
+                                    cam_state["cpuMhz"] = data["cpuMhz"]
+                                if "profile" in data:
+                                    cam_state["pwrProfile"] = data["profile"]
+                                if "throttled" in data:
+                                    cam_state["throttled"] = data["throttled"]
+                                if "coreTemp" in data:
+                                    cam_state["coreTemp"] = data["coreTemp"]
                             elif t in ("FS_LS_RES", "FS_READ_RES", "PONG", "ROT_CHANGE"):
                                 pending_responses[t] = data
+
                         except json.JSONDecodeError:
                             pass
                     else:
@@ -475,14 +485,35 @@ def serial_main_worker():
             while len(buf) > 0:
                 aud_idx = buf.find(MAGIC_LEGACY_AUD)
                 nl_idx  = buf.find(b'\n')
+                brace_idx = buf.find(b'{')
 
-                if aud_idx == -1 and nl_idx == -1:
-                    if len(buf) > 16384:
-                        buf.clear()
-                    break
+                # 1. Complete JSON state / response line available
+                if brace_idx != -1 and nl_idx != -1 and nl_idx > brace_idx and (aud_idx == -1 or brace_idx < aud_idx):
+                    line_bytes = buf[brace_idx:nl_idx]
+                    buf = buf[nl_idx + 1:]
+                    line_str = line_bytes.decode('utf-8', errors='ignore').strip()
+                    try:
+                        data = json.loads(line_str)
+                        t = data.get("type")
+                        if t in ("FS_LS_RES", "FS_READ_RES", "PONG"):
+                            pending_responses[t + "_MAIN"] = data
+                        else:
+                            for k, v in data.items():
+                                main_state[k] = v
+                    except json.JSONDecodeError:
+                        pass
+                    continue
 
-                # Process whichever frame indicator comes first
-                if aud_idx != -1 and (nl_idx == -1 or aud_idx < nl_idx):
+                # 2. Incomplete JSON line before any audio marker: wait for more bytes
+                if brace_idx != -1 and nl_idx == -1 and (aud_idx == -1 or brace_idx < aud_idx):
+                    if len(buf) < 2048:
+                        break  # Wait for newline from UART
+                    else:
+                        buf = buf[brace_idx + 1:]
+                        continue
+
+                # 3. Audio PCM packet (MAGIC_LEGACY_AUD = 0xAA55)
+                if aud_idx != -1 and (brace_idx == -1 or aud_idx < brace_idx):
                     if aud_idx > 0:
                         buf = buf[aud_idx:]
                     if len(buf) < 4:
@@ -527,40 +558,33 @@ def serial_main_worker():
                             b_end = max(b_start + 1, bin_edges[i+1])
                             band_e = np.mean(fft_vals[b_start:b_end]) if b_end > b_start else 0
                             main_smooth_bands[i] = max(main_smooth_bands[i] * 0.7, float(band_e))
+                    continue
 
-                else:
+                # 4. Plain text log line (without leading brace)
+                if nl_idx != -1:
                     line_bytes = buf[:nl_idx]
                     buf = buf[nl_idx + 1:]
-                    if b'{' in line_bytes:
-                        idx_brace = line_bytes.find(b'{')
-                        line_str = line_bytes[idx_brace:].decode('utf-8', errors='ignore').strip()
-                        try:
-                            data = json.loads(line_str)
-                            t = data.get("type")
-                            if t in ("FS_LS_RES", "FS_READ_RES", "PONG"):
-                                pending_responses[t + "_MAIN"] = data
-                            else:
-                                for k, v in data.items():
-                                    main_state[k] = v
-                        except json.JSONDecodeError:
-                            pass
-                    else:
-                        raw_line = line_bytes.decode('utf-8', errors='ignore').strip()
-                        if raw_line:
-                            if "[LIVEVIDEO-RX]" in raw_line:
-                                try:
-                                    parts = raw_line.split()
-                                    if 'fps' in parts:
-                                        fps_idx = parts.index('fps')
-                                        main_state["espnow_rx_fps"] = float(parts[fps_idx - 1])
-                                    for p in parts:
-                                        if p.startswith('loss='):
-                                            main_state["espnow_rx_loss"] = p.split('=')[1]
-                                    main_state["espnow_rx_time"] = time.time()
-                                except: pass
+                    raw_line = line_bytes.decode('utf-8', errors='ignore').strip()
+                    if raw_line:
+                        if "[LIVEVIDEO-RX]" in raw_line:
                             try:
-                                print(f"[MAIN DEV LOG] {raw_line}".encode('ascii', errors='replace').decode('ascii'), flush=True)
+                                parts = raw_line.split()
+                                if 'fps' in parts:
+                                    fps_idx = parts.index('fps')
+                                    main_state["espnow_rx_fps"] = float(parts[fps_idx - 1])
+                                for p in parts:
+                                    if p.startswith('loss='):
+                                        main_state["espnow_rx_loss"] = p.split('=')[1]
+                                main_state["espnow_rx_time"] = time.time()
                             except: pass
+                        try:
+                            print(f"[MAIN DEV LOG] {raw_line}".encode('ascii', errors='replace').decode('ascii'), flush=True)
+                        except: pass
+                    continue
+
+                if len(buf) > 16384:
+                    buf.clear()
+                break
 
         except Exception as e:
             print("[MAIN Serial Error]:", e)
@@ -595,18 +619,10 @@ def index():
     audio_devices = get_audio_output_devices()
     return render_template_string(html, ports=ports, audio_devices=audio_devices)
 
-# Connect / Disconnect for CAM Port (e.g. COM9)
-@app.route('/connect/cam', methods=['POST'])
-@app.route('/connect', methods=['POST'])
-def connect_cam():
+def do_connect_cam(port, baud=115200):
     global ser_cam, is_cam_connected, cam_port_name
-    data = request.json or {}
-    port = data.get('port', 'COM9')
-    baud = int(data.get('baudrate', 115200))
-
     if not port:
-        return jsonify({"success": False, "error": "No COM port selected"})
-
+        return False, "No COM port selected"
     with ser_cam_lock:
         if ser_cam:
             try: ser_cam.close()
@@ -630,47 +646,25 @@ def connect_cam():
                 with ser_cam_lock:
                     if ser_cam and ser_cam.is_open:
                         try:
-                            ser_cam.write(b"SET:CAM:1\n")
-                            ser_cam.write(b"SET:MIC:1\n")
+                            ser_cam.write(b'{"cmd":"PING"}\n')
+                            ser_cam.write(b'{"cmd":"PWR_GET_INFO"}\n')
+                            ser_cam.write(b"SET:CAM:1\nSET:MIC:1\n")
                             ser_cam.write(b'{"cmd":"START_STREAM"}\n')
                             ser_cam.flush()
-                            print(f"[XIAO CAM] Stream activated on {port} (SET:CAM:1, SET:MIC:1, START_STREAM)")
+                            print(f"[XIAO CAM] Initialized on {port} (USB Webcam stream active)")
                         except Exception as e:
                             print(f"[XIAO CAM] Activation error: {e}")
 
             threading.Thread(target=auto_activate, daemon=True).start()
-            return jsonify({"success": True, "port": port})
+            return True, None
         except Exception as e:
             is_cam_connected = False
-            return jsonify({"success": False, "error": str(e)})
+            return False, str(e)
 
-@app.route('/disconnect/cam', methods=['POST'])
-@app.route('/disconnect', methods=['POST'])
-def disconnect_cam():
-    global ser_cam, is_cam_connected
-    with ser_cam_lock:
-        if ser_cam:
-            try:
-                ser_cam.write(b"SET:CAM:0\nSET:MIC:0\n")
-                ser_cam.flush()
-            except: pass
-            try: ser_cam.close()
-            except: pass
-            ser_cam = None
-        is_cam_connected = False
-    return jsonify({"success": True})
-
-# Connect / Disconnect for MAIN DEVICE Port (e.g. COM18)
-@app.route('/connect/main', methods=['POST'])
-def connect_main():
+def do_connect_main(port, baud=115200):
     global ser_main, is_main_connected, main_port_name
-    data = request.json or {}
-    port = data.get('port')
-    baud = int(data.get('baudrate', 115200))
-
     if not port:
-        return jsonify({"success": False, "error": "No COM port selected"})
-
+        return False, "No COM port selected"
     with ser_main_lock:
         if ser_main:
             try: ser_main.close()
@@ -688,10 +682,50 @@ def connect_main():
             is_main_connected = True
             main_port_name = port
             print(f"[MAIN DEVICE] Connected to {port} @ {baud} baud")
-            return jsonify({"success": True, "port": port})
+            return True, None
         except Exception as e:
             is_main_connected = False
-            return jsonify({"success": False, "error": str(e)})
+            return False, str(e)
+
+# Connect / Disconnect for CAM Port (e.g. COM9)
+@app.route('/connect/cam', methods=['POST'])
+@app.route('/connect', methods=['POST'])
+def connect_cam():
+    data = request.json or {}
+    port = data.get('port', 'COM9')
+    baud = int(data.get('baudrate', 115200))
+    ok, err = do_connect_cam(port, baud)
+    if ok:
+        return jsonify({"success": True, "port": port})
+    return jsonify({"success": False, "error": err})
+
+@app.route('/disconnect/cam', methods=['POST'])
+@app.route('/disconnect', methods=['POST'])
+def disconnect_cam():
+    global ser_cam, is_cam_connected
+    with ser_cam_lock:
+        if ser_cam:
+            try:
+                ser_cam.write(b"SET:CAM:0\nSET:MIC:0\n")
+                ser_cam.flush()
+            except: pass
+            try: ser_cam.close()
+            except: pass
+            ser_cam = None
+        is_cam_connected = False
+    return jsonify({"success": True})
+
+# Connect / Disconnect for MAIN DEVICE Port (e.g. COM12 - Walkie-Talkie)
+@app.route('/connect/main', methods=['POST'])
+def connect_main():
+    data = request.json or {}
+    port = data.get('port', 'COM12')
+    baud = int(data.get('baudrate', 115200))
+    ok, err = do_connect_main(port, baud)
+    if ok:
+        return jsonify({"success": True, "port": port})
+    return jsonify({"success": False, "error": err})
+
 
 @app.route('/disconnect/main', methods=['POST'])
 def disconnect_main():
@@ -798,67 +832,83 @@ def cmd_cam_stream_stop():
                 return jsonify({"success": False, "error": str(e)})
     return jsonify({"success": False, "error": "Camera not connected"})
 
-# ─── Real-Time Telemetry Stream (SSE) ────────────────────────────────────────
+# ─── Real-Time Telemetry Engine ──────────────────────────────────────────────
+def get_telemetry_snapshot():
+    now = time.time()
+    is_streaming = (now - last_video_frame_time <= 2.2) and (latest_jpeg_frame is not None)
+
+    combined = {
+        "cam_connected": is_cam_connected and (ser_cam is not None and ser_cam.is_open),
+        "main_connected": is_main_connected and (ser_main is not None and ser_main.is_open),
+        "cam_port": cam_port_name,
+        "main_port": main_port_name,
+        "connected": is_cam_connected or is_main_connected,
+        "video_fresh": is_streaming,
+    }
+    # Camera state metrics
+    for k, v in cam_state.items():
+        combined[k] = v
+        combined["cam_" + k] = v
+
+    # True stream FPS vs Camera internal hardware FPS
+    combined["stream_fps"] = current_video_fps if is_streaming else 0
+    if is_streaming:
+        combined["fps"] = current_video_fps
+    else:
+        combined["fps"] = cam_state.get("fps", 0)
+
+    # Main state metrics: add with main_ prefix and keep root only for non-colliding keys
+    for k, v in main_state.items():
+        combined["main_" + k] = v
+        if k not in ("heap", "coreTemp", "fps", "screen", "screenName", "rotation", "throttled", "cpuMhz", "pwrProfile"):
+            combined[k] = v
+
+    # ESP-NOW Stream Status
+    espnow_recent = (now - main_state.get("espnow_rx_time", 0) <= 2.5)
+    combined["espnow_active"] = espnow_recent
+    if espnow_recent and cam_state.get("screen") == 5:
+        combined["fps"] = round(main_state.get("espnow_rx_fps", 15.0), 1)
+
+    # Core temperatures
+    cam_temp = cam_state.get("coreTemp", None)
+    main_temp = main_state.get("coreTemp", None)
+    combined["cam_core_temp"] = round(float(cam_temp), 1) if cam_temp is not None else None
+    combined["main_core_temp"] = round(float(main_temp), 1) if main_temp is not None else None
+    if cam_temp is not None:
+        combined["coreTemp"] = round(float(cam_temp), 1)
+
+    # Camera mic metrics
+    cam_db_val = float(cam_current_db)
+    if math.isinf(cam_db_val) or math.isnan(cam_db_val):
+        cam_db_val = -60.0
+    
+    # Main device mic metrics
+    main_db_val = float(main_current_db)
+    if math.isinf(main_db_val) or math.isnan(main_db_val):
+        main_db_val = -60.0
+
+    # Dedicated keys for Camera
+    combined["cam_mic_db"] = round(cam_db_val, 1)
+    combined["cam_mic_spectrum"] = cam_smooth_bands.tolist()
+    combined["mic_db"] = round(cam_db_val, 1)
+    combined["mic_spectrum"] = cam_smooth_bands.tolist()
+
+    # Dedicated keys for Main Device
+    combined["main_mic_db"] = round(main_db_val, 1)
+    combined["main_mic_spectrum"] = main_smooth_bands.tolist()
+    combined["main_mic_active"] = main_mic_active
+
+    return combined
+
+@app.route('/api/telemetry')
+def api_telemetry():
+    return jsonify(get_telemetry_snapshot())
+
 @app.route('/stream')
 def stream_sse():
     def event_generator():
         while True:
-            # Check video freshness
-            now = time.time()
-            if now - last_video_frame_time > 1.8:
-                cam_state["fps"] = 0
-
-            combined = {
-                "cam_connected": is_cam_connected and (ser_cam is not None and ser_cam.is_open),
-                "main_connected": is_main_connected and (ser_main is not None and ser_main.is_open),
-                "cam_port": cam_port_name,
-                "main_port": main_port_name,
-                "connected": is_cam_connected or is_main_connected,
-                "video_fresh": (now - last_video_frame_time <= 1.8),
-            }
-            # Merge cam_state
-            for k, v in cam_state.items():
-                combined[k] = v
-
-            # Merge main_state both directly at root AND with prefix "main_"
-            for k, v in main_state.items():
-                combined[k] = v
-                combined["main_" + k] = v
-
-            # ESP-NOW Stream Status
-            espnow_recent = (now - main_state.get("espnow_rx_time", 0) <= 2.5)
-            combined["espnow_active"] = espnow_recent
-            if espnow_recent and cam_state.get("screen") == 5:
-                combined["fps"] = round(main_state.get("espnow_rx_fps", 15.0), 1)
-
-            # Core temperatures
-            cam_temp = cam_state.get("coreTemp", 0)
-            main_temp = main_state.get("coreTemp", 0)
-            combined["cam_core_temp"] = round(float(cam_temp), 1) if cam_temp else None
-            combined["main_core_temp"] = round(float(main_temp), 1) if main_temp else None
-
-
-            # Camera mic metrics
-            cam_db_val = float(cam_current_db)
-            if math.isinf(cam_db_val) or math.isnan(cam_db_val):
-                cam_db_val = -60.0
-            
-            # Main device mic metrics
-            main_db_val = float(main_current_db)
-            if math.isinf(main_db_val) or math.isnan(main_db_val):
-                main_db_val = -60.0
-
-            # Dedicated keys for Camera
-            combined["cam_mic_db"] = round(cam_db_val, 1)
-            combined["cam_mic_spectrum"] = cam_smooth_bands.tolist()
-            combined["mic_db"] = round(cam_db_val, 1)
-            combined["mic_spectrum"] = cam_smooth_bands.tolist()
-
-            # Dedicated keys for Main Device
-            combined["main_mic_db"] = round(main_db_val, 1)
-            combined["main_mic_spectrum"] = main_smooth_bands.tolist()
-            combined["main_mic_active"] = main_mic_active
-
+            combined = get_telemetry_snapshot()
             try:
                 dumped = json.dumps(combined)
             except Exception as e:
@@ -1006,20 +1056,22 @@ def fs_ls():
     if not (active_ser and active_ser.is_open):
         return jsonify({"error": "No device connected"})
     
-    path = request.json.get("path", "/")
-    pending_responses.pop("FS_LS_RES", None)
+    path = (request.json or {}).get("path", "/")
+    res_key = "FS_LS_RES" if (active_ser == ser_cam) else "FS_LS_RES_MAIN"
+    pending_responses.pop(res_key, None)
     
     cmd = {"cmd": "FS_LS", "path": path}
     try:
         with active_lock:
             active_ser.write((json.dumps(cmd) + '\n').encode('utf-8'))
+            active_ser.flush()
     except Exception as e:
         return jsonify({"error": str(e)})
 
-    for _ in range(40):
+    for _ in range(60):
         time.sleep(0.05)
-        if "FS_LS_RES" in pending_responses:
-            return jsonify(pending_responses.pop("FS_LS_RES"))
+        if res_key in pending_responses:
+            return jsonify(pending_responses.pop(res_key))
 
     return jsonify({"error": "Timeout waiting for SD card listing"})
 
@@ -1034,24 +1086,28 @@ def fs_download():
     if not path:
         return "No path provided", 400
 
+    res_key = "FS_READ_RES" if (active_ser == ser_cam) else "FS_READ_RES_MAIN"
+
     def file_stream_generator():
         offset = 0
         chunk_size = 512
         while True:
-            pending_responses.pop("FS_READ_RES", None)
+            pending_responses.pop(res_key, None)
             cmd = {"cmd": "FS_READ", "path": path, "offset": offset, "size": chunk_size}
             try:
                 with active_lock:
                     active_ser.write((json.dumps(cmd) + '\n').encode('utf-8'))
+                    active_ser.flush()
             except:
                 break
             
             res = None
             for _ in range(60):
                 time.sleep(0.05)
-                if "FS_READ_RES" in pending_responses:
-                    res = pending_responses.pop("FS_READ_RES")
+                if res_key in pending_responses:
+                    res = pending_responses.pop(res_key)
                     break
+
 
             if not res or "error" in res:
                 break
@@ -1087,5 +1143,34 @@ if __name__ == '__main__':
         print("="*75 + "\n")
         webbrowser.open('http://127.0.0.1:5000/')
 
+    def background_autoconnect():
+        time.sleep(1.0)
+        avail_ports = [p.device for p in serial.tools.list_ports.comports()]
+        print(f"[AUTOCONNECT] Available COM ports: {avail_ports}")
+        if 'COM9' in avail_ports and not (ser_cam and ser_cam.is_open):
+            ok, err = do_connect_cam('COM9', 115200)
+            if ok:
+                print("[AUTOCONNECT] Auto-connected XIAO CAM on COM9")
+            else:
+                print("[AUTOCONNECT] COM9 connect error:", err)
+        # Autoconnect Main Device (Walkie-Talkie on COM12)
+        target_main = None
+        if 'COM12' in avail_ports:
+            target_main = 'COM12'
+        else:
+            for p in serial.tools.list_ports.comports():
+                if p.device != 'COM9' and getattr(p, 'vid', None) == 0x303A:
+                    target_main = p.device
+                    break
+
+        if target_main and not (ser_main and ser_main.is_open):
+            ok, err = do_connect_main(target_main, 115200)
+            if ok:
+                print(f"[AUTOCONNECT] Auto-connected MAIN DEVICE (Walkie-Talkie) on {target_main}")
+            else:
+                print(f"[AUTOCONNECT] {target_main} connect error:", err)
+
+    threading.Thread(target=background_autoconnect, daemon=True).start()
     threading.Thread(target=open_browser, daemon=True).start()
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+

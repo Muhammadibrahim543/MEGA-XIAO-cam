@@ -6,6 +6,15 @@
     <title>ESP32-S3 Dual Hardware Command Hub &bull; Vision + Tracker</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=Share+Tech+Mono&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        window.handleStreamErr = function(img) {
+            if (!img) return;
+            img.onerror = null;
+            setTimeout(() => {
+                if (img) img.src = '/video_feed?t=' + Date.now();
+            }, 1200);
+        };
+    </script>
     <style>
         :root {
             --bg: #080a0f;
@@ -53,14 +62,15 @@
         header {
             background: rgba(16, 20, 29, 0.95);
             border-bottom: 1px solid var(--border);
-            padding: 10px 24px;
+            padding: 8px 18px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             z-index: 100;
-            gap: 16px;
+            gap: 12px;
             flex-shrink: 0;
             backdrop-filter: blur(8px);
+            flex-wrap: wrap;
         }
 
         .brand-area {
@@ -81,7 +91,7 @@
             box-shadow: 0 0 14px rgba(0, 212, 255, 0.4);
         }
         .brand-title {
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 800;
             letter-spacing: -0.3px;
             background: linear-gradient(90deg, #ffffff, var(--primary));
@@ -94,11 +104,74 @@
             font-family: 'Share Tech Mono', monospace;
         }
 
+        /* Responsive Layout View Switcher */
+        .view-switcher {
+            display: flex;
+            align-items: center;
+            background: rgba(10, 14, 22, 0.85);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 3px;
+            gap: 3px;
+        }
+        .view-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.15s;
+        }
+        .view-btn:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .view-btn.active {
+            background: var(--surface-card);
+            color: var(--primary);
+            box-shadow: 0 0 8px rgba(0, 212, 255, 0.25);
+            border-color: rgba(0, 212, 255, 0.3);
+        }
+
+        /* Keyboard Target Switcher */
+        .target-switcher {
+            display: flex;
+            align-items: center;
+            background: rgba(10, 14, 22, 0.85);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 2px 6px;
+            gap: 4px;
+        }
+        .target-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            padding: 3px 8px;
+            border-radius: 5px;
+            font-size: 10px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .target-btn.active {
+            background: var(--surface-card);
+            color: #fff;
+            border-color: var(--primary);
+            box-shadow: 0 0 8px rgba(0, 212, 255, 0.3);
+        }
+
         /* Dual Connection Boxes */
         .dual-connections {
             display: flex;
             align-items: center;
-            gap: 14px;
+            gap: 10px;
             flex-wrap: wrap;
         }
 
@@ -109,7 +182,7 @@
             background: rgba(21, 26, 38, 0.85);
             border: 1px solid var(--border);
             border-radius: 8px;
-            padding: 5px 12px;
+            padding: 5px 10px;
             transition: all 0.2s;
         }
         .conn-box:hover {
@@ -206,16 +279,57 @@
         /* ─── MAIN WORKSPACE GRID ───────────────────────────────────────── */
         .workspace {
             flex: 1;
+            min-height: 0;
             display: flex;
-            height: calc(100vh - 60px);
-            overflow: hidden;
+            overflow-x: auto;
+            overflow-y: hidden;
             background: var(--bg);
+            scroll-behavior: smooth;
+        }
+        .workspace::-webkit-scrollbar { height: 7px; }
+        .workspace::-webkit-scrollbar-track { background: #090c13; }
+        .workspace::-webkit-scrollbar-thumb { background: #222b3d; border-radius: 4px; }
+        .workspace::-webkit-scrollbar-thumb:hover { background: var(--primary); }
+
+        /* Responsive Column Focus Modes */
+        .workspace.focus-wt .side-twin-1 {
+            width: 100% !important;
+            max-width: 520px !important;
+            margin: 0 auto;
+            border-right: none;
+            flex: 1;
+        }
+        .workspace.focus-wt .side-twin-2,
+        .workspace.focus-wt .main-studio-col {
+            display: none !important;
+        }
+
+        .workspace.focus-cam .side-twin-2 {
+            width: 100% !important;
+            max-width: 500px !important;
+            margin: 0 auto;
+            border-right: none;
+            flex: 1;
+        }
+        .workspace.focus-cam .side-twin-1,
+        .workspace.focus-cam .main-studio-col {
+            display: none !important;
+        }
+
+        .workspace.focus-studio .main-studio-col {
+            flex: 1 !important;
+            width: 100% !important;
+        }
+        .workspace.focus-studio .side-twin-1,
+        .workspace.focus-studio .side-twin-2 {
+            display: none !important;
         }
 
         /* ─── COLUMN 1: DEVICE 1 (WALKIE-TALKIE DIGITAL TWIN) ───────────── */
         .side-twin-1 {
-            width: 360px;
-            min-width: 360px;
+            width: 350px;
+            min-width: 310px;
+            flex-shrink: 0;
             background: #0d1017;
             border-right: 1px solid var(--border);
             display: flex;
@@ -224,6 +338,7 @@
             padding: 16px 12px;
             overflow-y: auto;
             position: relative;
+            transition: all 0.25s ease;
         }
         .side-twin-1::-webkit-scrollbar { width: 5px; }
         .side-twin-1::-webkit-scrollbar-thumb { background: #222b3d; border-radius: 4px; }
@@ -244,11 +359,12 @@
             background: #684a32;
             background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><filter id="noiseFilter"><feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/></filter><rect width="100%" height="100%" filter="url(%23noiseFilter)" opacity="0.15"/></svg>');
             width: 300px;
-            height: 590px;
-            border-radius: 12px;
+            min-height: 560px;
+            height: auto;
+            border-radius: 16px;
             border: 2px solid #4a3320;
             box-shadow: 0 15px 35px rgba(0,0,0,0.8), inset -4px -4px 12px rgba(0,0,0,0.4), inset 4px 4px 12px rgba(255,255,255,0.1);
-            padding: 24px 12px 12px;
+            padding: 24px 14px 20px;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -305,19 +421,103 @@
         .clock-date { font-size: 14px; color: #aaa; text-align: center; margin-top: 8px;}
         @keyframes blink { 50% { opacity: 0; } }
 
-        .wt-controls-area { position: relative; width: 100%; height: 160px; margin-top: 24px; }
-        .wt-btn { position: absolute; background: #222; border: 2px solid #111; border-radius: 5px; width: 26px; height: 26px; cursor: pointer; box-shadow: 2px 2px 5px rgba(0,0,0,0.5), inset 1px 1px 3px rgba(255,255,255,0.1); }
-        .wt-btn:active { box-shadow: inset 2px 2px 5px rgba(0,0,0,0.8); }
-        .wt-btn-up { top: 8px; left: 50px; } .wt-btn-dn { top: 75px; left: 50px; } .wt-btn-l { top: 41px; left: 16px; } .wt-btn-r { top: 41px; left: 84px; }
-        .wt-btn-ex1 { top: 8px; right: 45px; } .wt-btn-ex2 { top: 41px; right: 45px; } .wt-btn-ex3 { top: 75px; right: 45px; } .wt-btn-sel { top: 108px; right: 45px; }
-
-        .wt-logo-area { position: absolute; bottom: 12px; width: 100%; text-align: center; pointer-events: none; }
-        .wt-logo-area svg { width: 65px; fill: none; stroke: #fff; stroke-width: 4; opacity: 0.85; }
+        /* Tactile Keypad for Walkie-Talkie */
+        .wt-keypad-panel {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            margin-top: 16px;
+        }
+        .wt-dpad-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 44px);
+            grid-template-rows: repeat(3, 34px);
+            gap: 4px;
+            justify-content: center;
+            align-items: center;
+        }
+        .wt-tactile-btn {
+            background: linear-gradient(180deg, #2b3345, #191f2c);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 6px;
+            color: #d1d5db;
+            font-size: 11px;
+            font-weight: 700;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.6), inset 0 1px 1px rgba(255,255,255,0.15);
+            transition: all 0.1s ease;
+            height: 100%;
+            width: 100%;
+            padding: 0;
+            user-select: none;
+        }
+        .wt-tactile-btn:hover {
+            border-color: var(--accent-purple);
+            color: #fff;
+            transform: translateY(-1px);
+        }
+        .wt-tactile-btn:active {
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.8);
+            transform: translateY(1px);
+            background: #111520;
+        }
+        .wt-tactile-btn span {
+            font-size: 8px;
+            margin-top: 1px;
+            letter-spacing: 0.5px;
+        }
+        .wt-tactile-ok {
+            background: linear-gradient(135deg, #00b0ff, #0081cb);
+            border-color: #40c4ff;
+            color: #fff;
+        }
+        .wt-tactile-ok:hover {
+            box-shadow: 0 0 10px rgba(0,176,255,0.6);
+        }
+        .wt-aux-row {
+            display: flex;
+            gap: 8px;
+            width: 100%;
+            justify-content: center;
+            margin-top: 4px;
+        }
+        .wt-aux-btn {
+            flex: 1;
+            max-width: 110px;
+            height: 30px;
+            background: linear-gradient(180deg, #232938, #161a25);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 6px;
+            color: #94a3b8;
+            font-size: 11px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+            transition: all 0.15s ease;
+        }
+        .wt-aux-btn:hover {
+            border-color: var(--accent-cyan);
+            color: #fff;
+        }
+        .wt-aux-btn:active {
+            transform: translateY(1px);
+        }
 
         /* ─── COLUMN 2: DEVICE 2 (XIAO CAM VIRTUAL HARDWARE & 172x320 DISPLAY) ─ */
         .side-twin-2 {
-            width: 350px;
-            min-width: 350px;
+            width: 340px;
+            min-width: 300px;
+            flex-shrink: 0;
             background: #0b0e15;
             border-right: 1px solid var(--border);
             display: flex;
@@ -326,6 +526,7 @@
             padding: 16px 12px;
             overflow-y: auto;
             position: relative;
+            transition: all 0.25s ease;
         }
         .side-twin-2::-webkit-scrollbar { width: 5px; }
         .side-twin-2::-webkit-scrollbar-thumb { background: #222b3d; border-radius: 4px; }
@@ -577,32 +778,38 @@
         /* ─── COLUMN 3: LIVE COMMAND CENTER & TUNING TABS ───────────────── */
         .main-studio-col {
             flex: 1;
+            min-width: 360px;
             display: flex;
             flex-direction: column;
             background: var(--bg);
             overflow: hidden;
+            transition: all 0.25s ease;
         }
 
         /* Studio Tabs */
         .studio-tabs {
             display: flex;
             background: var(--surface);
-            padding: 0 20px;
+            padding: 0 16px;
             border-bottom: 1px solid var(--border);
             flex-shrink: 0;
-            gap: 6px;
+            gap: 4px;
+            overflow-x: auto;
         }
+        .studio-tabs::-webkit-scrollbar { height: 3px; }
+        .studio-tabs::-webkit-scrollbar-thumb { background: #222b3d; }
         .s-tab {
-            padding: 12px 18px;
+            padding: 10px 14px;
             color: var(--text-muted);
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 600;
             cursor: pointer;
             border-bottom: 2px solid transparent;
             transition: all 0.2s;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
+            white-space: nowrap;
         }
         .s-tab:hover { color: var(--text-main); }
         .s-tab.active {
@@ -614,19 +821,19 @@
         .studio-content {
             flex: 1;
             overflow-y: auto;
-            padding: 20px 24px;
+            padding: 16px 20px;
         }
         .studio-content::-webkit-scrollbar { width: 6px; }
         .studio-content::-webkit-scrollbar-thumb { background: #222b3d; border-radius: 4px; }
 
         .tab-panel { display: none; }
-        .tab-panel.active { display: flex; flex-direction: column; gap: 20px; }
+        .tab-panel.active { display: flex; flex-direction: column; gap: 16px; }
 
         /* Cards & Widgets */
         .card-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 14px;
         }
         .dash-card {
             background: var(--surface-card);
@@ -832,12 +1039,141 @@
             align-items: center;
             border-bottom: 1px solid var(--border);
         }
-        .modal-img {
-            width: 100%;
-            height: auto;
-            max-height: 75vh;
-            object-fit: contain;
-            background: #000;
+        /* Walkie-Talkie 29-Module Grid Launcher */
+        .module-launcher-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+            gap: 10px;
+            margin-top: 8px;
+        }
+        .module-card {
+            background: #101522;
+            border: 1px solid #1f283d;
+            border-radius: 8px;
+            padding: 10px 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 6px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+            user-select: none;
+        }
+        .module-card:hover {
+            background: #171f33;
+            border-color: var(--accent-purple);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(157, 78, 221, 0.25);
+        }
+        .module-card.active {
+            background: linear-gradient(135deg, rgba(124, 77, 255, 0.25), rgba(157, 78, 221, 0.15));
+            border-color: #9d4edd;
+            box-shadow: 0 0 14px rgba(157, 78, 221, 0.4);
+        }
+        .module-card.active .mod-icon {
+            color: #fff;
+            transform: scale(1.1);
+        }
+        .module-card.active .mod-badge {
+            background: #00e676;
+            color: #000;
+        }
+        .mod-num {
+            position: absolute;
+            top: 5px;
+            left: 7px;
+            font-size: 9px;
+            font-family: 'Share Tech Mono', monospace;
+            color: #64748b;
+        }
+        .mod-badge {
+            position: absolute;
+            top: 5px;
+            right: 6px;
+            font-size: 8px;
+            font-weight: 800;
+            padding: 1px 4px;
+            border-radius: 3px;
+            background: #1e293b;
+            color: #94a3b8;
+            letter-spacing: 0.5px;
+        }
+        .mod-icon {
+            font-size: 20px;
+            color: #a78bfa;
+            margin-top: 10px;
+            transition: transform 0.2s;
+        }
+        .mod-name {
+            font-size: 11px;
+            font-weight: 700;
+            color: #e2e8f0;
+            line-height: 1.2;
+        }
+        .mod-cat {
+            font-size: 9px;
+            color: #64748b;
+            font-family: 'Share Tech Mono', monospace;
+        }
+
+        /* ─── RESPONSIVE MEDIA QUERIES (NO OVERFLOW BREAKAGE) ────────────── */
+        @media (max-width: 1280px) {
+            header {
+                padding: 8px 12px;
+                gap: 8px;
+            }
+            .brand-title { font-size: 14px; }
+            .brand-sub { display: none; }
+            .side-twin-1 {
+                width: 320px;
+                min-width: 300px;
+            }
+            .side-twin-2 {
+                width: 310px;
+                min-width: 290px;
+            }
+            .wt-device {
+                transform: scale(0.9);
+                margin-top: 0;
+            }
+            .cam-device-case {
+                transform: scale(0.95);
+            }
+        }
+
+        @media (max-width: 980px) {
+            header {
+                flex-direction: column;
+                align-items: stretch;
+                padding: 8px 12px;
+                gap: 8px;
+            }
+            .brand-area {
+                justify-content: space-between;
+                width: 100%;
+            }
+            .dual-connections {
+                justify-content: flex-start;
+                width: 100%;
+                overflow-x: auto;
+                padding-bottom: 2px;
+            }
+            .view-switcher {
+                align-self: center;
+            }
+        }
+
+        @media (max-width: 680px) {
+            .dual-connections {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .conn-box {
+                flex-wrap: wrap;
+                justify-content: space-between;
+            }
         }
     </style>
 </head>
@@ -855,10 +1191,25 @@
             </div>
         </div>
 
+        <!-- Layout View Mode Switcher -->
+        <div class="view-switcher" id="view-mode-bar">
+            <button class="view-btn active" id="vbtn-all" onclick="setWorkspaceView('all')" title="Show All 3 Columns"><i class="fas fa-columns"></i> <span>All</span></button>
+            <button class="view-btn" id="vbtn-wt" onclick="setWorkspaceView('wt')" title="Focus Walkie-Talkie (Device 1)"><i class="fas fa-satellite-dish"></i> <span>Walkie</span></button>
+            <button class="view-btn" id="vbtn-cam" onclick="setWorkspaceView('cam')" title="Focus Xiao Cam (Device 2)"><i class="fas fa-camera"></i> <span>Cam</span></button>
+            <button class="view-btn" id="vbtn-studio" onclick="setWorkspaceView('studio')" title="Focus Studio Command Center"><i class="fas fa-sliders-h"></i> <span>Studio</span></button>
+        </div>
+
+        <!-- Keyboard Controls Target Selector -->
+        <div class="target-switcher" title="Active device controlled by keyboard arrows, WASD, Enter, Esc">
+            <span style="font-size: 10px; color: var(--text-muted); font-weight: bold;"><i class="fas fa-keyboard"></i> KEY:</span>
+            <button class="target-btn active" id="tgt-cam" onclick="setControlTarget('cam')">📷 Cam</button>
+            <button class="target-btn" id="tgt-wt" onclick="setControlTarget('wt')">📻 Walkie</button>
+        </div>
+
         <div class="dual-connections">
             <!-- PORT 1: XIAO CAM (Default COM9) -->
             <div class="conn-box">
-                <span class="conn-tag cam"><i class="fas fa-video"></i> CAM PORT:</span>
+                <span class="conn-tag cam"><i class="fas fa-video"></i> CAM:</span>
                 <select id="cam-port-select" class="port-sel">
                     {% for p in ports %}
                     <option value="{{ p }}" {% if p == 'COM9' %}selected{% endif %}>{{ p }}</option>
@@ -868,7 +1219,7 @@
                     {% endif %}
                 </select>
 
-                <select id="cam-baud-select" class="port-sel" style="width: 85px;">
+                <select id="cam-baud-select" class="port-sel" style="width: 80px;">
                     <option value="115200" selected>115200</option>
                     <option value="921600">921600</option>
                 </select>
@@ -887,21 +1238,20 @@
 
             <!-- PORT 2: MAIN TRACKER / WALKIE-TALKIE -->
             <div class="conn-box">
-                <span class="conn-tag main"><i class="fas fa-satellite-dish"></i> MAIN PORT:</span>
+                <span class="conn-tag main"><i class="fas fa-satellite-dish"></i> MAIN:</span>
                 <select id="main-port-select" class="port-sel">
-                    <option value="">Select Main Port...</option>
+                    <option value="">Select Port...</option>
                     {% for p in ports %}
                     {% if p != 'COM9' %}
-                    <option value="{{ p }}" {% if p == 'COM12' %}selected{% endif %}>{{ p }}</option>
+                    <option value="{{ p }}" {% if p == 'COM12' %}selected{% endif %}>{{ p }}{% if p == 'COM12' %} (Walkie-Talkie){% elif 'COM18' in p or 'COM19' in p %} (BT - Not Device){% endif %}</option>
                     {% endif %}
                     {% endfor %}
                     {% if 'COM12' not in ports %}
-                    <option value="COM12" selected>COM12 (Main Device)</option>
+                    <option value="COM12" selected>COM12 (Walkie-Talkie)</option>
                     {% endif %}
                 </select>
 
-
-                <select id="main-baud-select" class="port-sel" style="width: 85px;">
+                <select id="main-baud-select" class="port-sel" style="width: 80px;">
                     <option value="115200" selected>115200</option>
                     <option value="921600">921600</option>
                 </select>
@@ -953,36 +1303,53 @@
                     </div>
                 </div>
 
-                <div class="wt-controls-area">
-                    <div class="wt-btn wt-btn-up" onmousedown="sendMainBtn(0,1)" onmouseup="sendMainBtn(0,0)" title="UP"></div>
-                    <div class="wt-btn wt-btn-dn" onmousedown="sendMainBtn(1,1)" onmouseup="sendMainBtn(1,0)" title="DOWN"></div>
-                    <div class="wt-btn wt-btn-l" onmousedown="sendMainBtn(2,1)" onmouseup="sendMainBtn(2,0)" title="LEFT/PREV"></div>
-                    <div class="wt-btn wt-btn-r" onmousedown="sendMainBtn(3,1)" onmouseup="sendMainBtn(3,0)" title="RIGHT/NEXT"></div>
+                <!-- Tactile Keypad Panel directly on Walkie-Talkie Casing -->
+                <div class="wt-keypad-panel">
+                    <div class="wt-dpad-grid">
+                        <div></div>
+                        <button class="wt-tactile-btn" onclick="sendMainBtnPulse(0)" title="UP (W / Up Arrow)"><i class="fas fa-chevron-up"></i><span>UP</span></button>
+                        <div></div>
 
-                    <div class="wt-btn wt-btn-ex1" onmousedown="sendMainBtn(4,1)" onmouseup="sendMainBtn(4,0)" title="SELECT/OK"></div>
-                    <div class="wt-btn wt-btn-ex2" onmousedown="sendMainBtn(6,1)" onmouseup="sendMainBtn(6,0)" title="EXTRA 2"></div>
-                    <div class="wt-btn wt-btn-ex3" onmousedown="sendMainBtn(7,1)" onmouseup="sendMainBtn(7,0)" title="EXTRA 3"></div>
-                    <div class="wt-btn wt-btn-sel" onmousedown="sendMainBtn(5,1)" onmouseup="sendMainBtn(5,0)" title="EXTRA 1 (BACK)"></div>
-                </div>
+                        <button class="wt-tactile-btn" onclick="sendMainBtnPulse(2)" title="LEFT / PREV (A / Left Arrow)"><i class="fas fa-chevron-left"></i><span>PREV</span></button>
+                        <button class="wt-tactile-btn wt-tactile-ok" onclick="sendMainBtnPulse(4)" title="OK / Enter"><i class="fas fa-check"></i><span>OK</span></button>
+                        <button class="wt-tactile-btn" onclick="sendMainBtnPulse(3)" title="RIGHT / NEXT (D / Right Arrow)"><i class="fas fa-chevron-right"></i><span>NEXT</span></button>
 
-                <div class="wt-logo-area">
-                    <svg viewBox="0 0 100 100">
-                        <path d="M 50 90 C 20 60 10 40 10 30 C 10 15 25 10 35 15 C 45 20 50 30 50 30 C 50 30 55 20 65 15 C 75 10 90 15 90 30 C 90 40 80 60 50 90" stroke-width="4"/>
-                        <path d="M 40 40 L 45 30 L 60 35 L 65 25 L 75 40 C 75 60 60 70 50 70 C 40 70 35 55 40 40" stroke-width="3"/>
-                    </svg>
+                        <div></div>
+                        <button class="wt-tactile-btn" onclick="sendMainBtnPulse(1)" title="DOWN (S / Down Arrow)"><i class="fas fa-chevron-down"></i><span>DN</span></button>
+                        <div></div>
+                    </div>
+
+                    <div class="wt-aux-row">
+                        <button class="wt-aux-btn" onclick="sendMainBtnPulse(5)" title="BACK / EXIT (Esc)"><i class="fas fa-arrow-left"></i> BACK</button>
+                        <button class="wt-aux-btn" onclick="sendMainBtnPulse(6)" title="OPTION"><i class="fas fa-sliders-h"></i> OPT</button>
+                    </div>
                 </div>
 
                 <!-- Quick Action Buttons for Main Device -->
-                <div class="c-btn-action-row" style="margin-top: 8px; width: 100%; padding: 0 4px;">
-                    <button class="c-btn" style="flex:1;" onclick="toggleMainMic()" title="Toggle Main Device Microphone (INMP441)">
-                        <i class="fas fa-microphone"></i> Toggle Mic
+                <div class="c-btn-action-row" style="margin-top: 14px; width: 100%; padding: 0 4px; gap: 4px;">
+                    <button class="c-btn" style="flex:1; padding: 4px 6px;" onclick="toggleMainMic()" title="Toggle Main Device Microphone (INMP441)">
+                        <i class="fas fa-microphone"></i> Mic
                     </button>
-                    <button class="c-btn" style="flex:1;" onclick="toggleMainSpk()" title="Toggle Main Device Speaker">
-                        <i class="fas fa-volume-up"></i> Toggle Spk
+                    <button class="c-btn" style="flex:1; padding: 4px 6px;" onclick="toggleMainSpk()" title="Toggle Main Device Speaker">
+                        <i class="fas fa-volume-up"></i> Spk
                     </button>
-                    <button class="c-btn" style="flex:1;" onclick="setMainMode(13)" title="Switch to USB Audio / Mic Mode">
-                        <i class="fas fa-podcast"></i> USB Mic
+                    <button class="c-btn" style="flex:1; padding: 4px 6px;" onclick="setMainMode(13)" title="Switch to USB Audio / Mic Mode">
+                        <i class="fas fa-podcast"></i> USB Audio
                     </button>
+                    <button class="c-btn" style="flex:1; padding: 4px 6px;" onclick="setMainMode(16)" title="Switch to Live RF Radio">
+                        <i class="fas fa-broadcast-tower"></i> Radio
+                    </button>
+                </div>
+
+                <!-- Direct Module Jump Menu for Walkie-Talkie -->
+                <div style="width: 100%; margin-top: 12px; padding: 8px 10px; background: rgba(0,0,0,0.6); border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); display: flex; flex-direction: column; gap: 6px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--accent-purple);"><i class="fas fa-th-large"></i> QUICK MODULE JUMP</span>
+                        <span id="wt-current-mode-tag" style="font-size: 10px; font-family: 'Share Tech Mono', monospace; color: var(--accent-green); background: rgba(0,230,118,0.15); padding: 1px 6px; border-radius: 3px;">MODE 0</span>
+                    </div>
+                    <select id="wt-quick-mode-sel" class="port-sel" style="width: 100%; font-size: 11px; height: 26px;" onchange="if(this.value!=='') setMainMode(this.value)">
+                        <option value="">-- Jump to Any Module (0-28) --</option>
+                    </select>
                 </div>
             </div>
         </div>
@@ -997,9 +1364,12 @@
                 <!-- Camera Case Header -->
                 <div class="cam-case-top">
                     <span class="cam-badge-label">SEEED XIAO SENSE</span>
-                    <span id="cam-hdr-temp" style="font-size: 10px; color: var(--accent-cyan); font-family: 'Share Tech Mono', monospace; font-weight: bold; background: rgba(0,212,255,0.12); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,212,255,0.25);"><i class="fas fa-thermometer-half"></i> --°C</span>
+                    <div style="display: flex; align-items: center; gap: 5px;">
+                        <span id="cam-hdr-fps" style="font-size: 10px; color: #00e676; font-family: 'Share Tech Mono', monospace; font-weight: bold; background: rgba(0,230,118,0.15); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,230,118,0.35);"><i class="fas fa-bolt"></i> <span id="cam-hdr-fps-val">--</span> FPS</span>
+                        <span id="cam-hdr-temp" style="font-size: 10px; color: var(--accent-cyan); font-family: 'Share Tech Mono', monospace; font-weight: bold; background: rgba(0,212,255,0.12); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,212,255,0.25);"><i class="fas fa-thermometer-half"></i> <span id="cam-hdr-temp-val">--</span>°C</span>
+                    </div>
                     <div class="cam-lens-accent">
-                        <div class="cam-led-status" id="cam-led-indicator"></div>
+                        <div class="cam-led-status on" id="cam-led-indicator"></div>
                         <div class="cam-lens-circle"></div>
                     </div>
                 </div>
@@ -1024,7 +1394,7 @@
                             <div class="cam-vf-hud" style="z-index: 6;">
                                 <div class="cam-vf-hud-top">
                                     <span id="hud-cam-res">SVGA</span>
-                                    <span id="hud-cam-fps">0 FPS</span>
+                                    <span id="hud-cam-fps" style="background: rgba(0,0,0,0.65); padding: 2px 7px; border-radius: 4px; border: 1px solid rgba(0,230,118,0.4); color: #00e676; font-weight: 700;">-- FPS</span>
                                 </div>
                                 <div class="cam-vf-hud-bot">
                                     <span id="hud-cam-mode">VIEWFINDER</span>
@@ -1038,8 +1408,9 @@
                             <div class="cam-menu-hdr" id="cam-menu-title">SCR: VIEWFINDER</div>
                             <div class="cam-menu-stats">
                                 <div id="cam-stat-q">Quality: Q12 (SVGA)</div>
-                                <div id="cam-stat-fps">C0 D0 fps</div>
-                                <div id="cam-stat-temp">Core: --°C</div>
+                                <div id="cam-stat-fps" style="color: #00e676; font-weight: bold;"><i class="fas fa-tachometer-alt"></i> Stream: <span id="cam-stat-stream-val">--</span> FPS | HW: <span id="cam-stat-hw-val">--</span></div>
+                                <div id="cam-stat-temp"><i class="fas fa-thermometer-half"></i> Core: <span id="cam-stat-temp-val">--</span>°C</div>
+                                <div id="cam-stat-cpu" style="color: var(--accent-green);">CPU: 240 MHz (AUTO)</div>
                                 <div id="cam-stat-heap">Heap: 215 KB</div>
                                 <div id="cam-stat-psram">PSRAM: 7.2 MB</div>
                             </div>
@@ -1051,62 +1422,67 @@
                     </div>
                 </div>
 
-                <!-- Physical Hardware Buttons on XIAO Cam Casing -->
-                <div class="cam-btn-panel">
-                    <div class="cam-dpad-row">
-                        <button class="c-btn" onclick="sendCamNav('UP')" title="UP (W / Up Arrow)">
+                <!-- Physical Hardware Buttons on XIAO Cam Casing (Balanced & Non-Overlapping) -->
+                <div class="cam-btn-panel" style="width: 100%; display: flex; flex-direction: column; gap: 6px; margin-top: 10px;">
+                    <!-- Row 1: D-Pad Navigation -->
+                    <div style="display: flex; gap: 6px; width: 100%;">
+                        <button class="c-btn" style="flex:1;" onclick="sendCamNav('UP')" title="UP (W / Up Arrow)">
                             <i class="fas fa-chevron-up"></i> UP
                         </button>
-                        <button class="c-btn c-btn-ok" onclick="sendCamNav('OK')" title="OK / Confirm (Enter / Space)">
+                        <button class="c-btn c-btn-ok" style="flex:1.2;" onclick="sendCamNav('OK')" title="OK / Confirm (Enter / Space)">
                             OK
                         </button>
-                        <button class="c-btn" onclick="sendCamNav('DOWN')" title="DOWN (S / Down Arrow)">
+                        <button class="c-btn" style="flex:1;" onclick="sendCamNav('DOWN')" title="DOWN (S / Down Arrow)">
                             <i class="fas fa-chevron-down"></i> DN
                         </button>
                     </div>
 
-                    <div class="c-btn-action-row">
-                        <button class="c-btn" onclick="sendCamNav('BACK')" title="BACK / Exit (Esc / B)">
+                    <!-- Row 2: Menu / Back / Record -->
+                    <div style="display: flex; gap: 6px; width: 100%;">
+                        <button class="c-btn" style="flex:1;" onclick="sendCamNav('BACK')" title="BACK / Exit (Esc / B)">
                             <i class="fas fa-arrow-left"></i> BACK
                         </button>
-                        <button class="c-btn" onclick="sendCamNav('MENU')" title="Open Main Menu (M)">
+                        <button class="c-btn" style="flex:1;" onclick="sendCamNav('MENU')" title="Open Main Menu (M)">
                             <i class="fas fa-bars"></i> MENU
                         </button>
-                        <button id="btn-cam-rec" class="c-btn c-btn-rec" onclick="toggleCamRec()" title="Toggle Video Recording to SD (R)">
+                        <button id="btn-cam-rec" class="c-btn c-btn-rec" style="flex:1;" onclick="toggleCamRec()" title="Toggle Video Recording to SD (R)">
                             <i class="fas fa-circle"></i> REC
                         </button>
                     </div>
 
-                    <div class="c-btn-action-row">
-                        <button class="c-btn" onclick="toggleDisplayFlip()" title="Flip physical screen 180 degrees (F)">
-                            <i class="fas fa-rotate"></i> Flip 180&deg;
+                    <!-- Row 3: Display Flip & Stream Actions -->
+                    <div style="display: flex; gap: 6px; width: 100%;">
+                        <button class="c-btn" style="flex:1;" onclick="toggleDisplayFlip()" title="Flip physical screen 180 degrees (F)">
+                            <i class="fas fa-rotate"></i> 180&deg;
                         </button>
-                        <button class="c-btn" onclick="cycleCamVideoRotation()" title="Rotate Browser Video 90°">
+                        <button class="c-btn" style="flex:1;" onclick="cycleCamVideoRotation()" title="Rotate Browser Video 90°">
                             <i class="fas fa-redo"></i> Rot 90&deg;
                         </button>
-                        <button class="c-btn" onclick="toggleCamStreamState()" title="Toggle Webcam Streaming (V)">
+                        <button class="c-btn" style="flex:1;" onclick="toggleCamStreamState()" title="Toggle Webcam Streaming (V)">
                             <i class="fas fa-broadcast-tower"></i> Stream
                         </button>
                     </div>
 
-                    <div class="c-btn-action-row" style="margin-top: 5px;">
-                        <button class="c-btn" id="btn-vf-fit" onclick="toggleVfFitMode()" title="Toggle Contain (Full uncropped view) vs Cover (Fill viewfinder)">
-                            <i class="fas fa-compress-alt"></i> Fit View
+                    <!-- Row 4: View Options -->
+                    <div style="display: flex; gap: 4px; width: 100%;">
+                        <button class="c-btn" id="btn-vf-fit" style="flex:1; padding: 5px 4px; font-size: 10px;" onclick="toggleVfFitMode()" title="Toggle Contain vs Cover">
+                            <i class="fas fa-compress-alt"></i> Fit
                         </button>
-                        <button class="c-btn" onclick="toggleSensorFlip('VF')" title="Camera Sensor Hardware Vertical Flip">
+                        <button class="c-btn" style="flex:1; padding: 5px 4px; font-size: 10px;" onclick="toggleSensorFlip('VF')" title="Vertical Flip">
                             <i class="fas fa-arrows-alt-v"></i> V-Flip
                         </button>
-                        <button class="c-btn" onclick="toggleSensorFlip('HM')" title="Camera Sensor Hardware Horizontal Mirror">
+                        <button class="c-btn" style="flex:1; padding: 5px 4px; font-size: 10px;" onclick="toggleSensorFlip('HM')" title="Horizontal Mirror">
                             <i class="fas fa-arrows-alt-h"></i> H-Mir
                         </button>
-                        <button class="c-btn" onclick="openBigMonitor()" title="Expand High-Definition Monitor">
+                        <button class="c-btn" style="flex:1; padding: 5px 4px; font-size: 10px;" onclick="openBigMonitor()" title="Full HD Monitor">
                             <i class="fas fa-expand"></i> Max
                         </button>
                     </div>
 
-                    <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 6px; padding: 0 4px; font-size: 10px;">
-                        <span style="color: var(--text-muted); font-weight: bold;">JUMP:</span>
-                        <select id="cam-screen-jump-sel" class="port-sel" style="flex:1; margin-left: 6px; font-size: 10px; padding: 2px 4px; height: 24px;" onchange="jumpCamScreen(this.value)">
+                    <!-- Row 5: Screen Quick Jump -->
+                    <div style="display: flex; align-items: center; width: 100%; gap: 6px; margin-top: 2px;">
+                        <span style="color: var(--text-muted); font-size: 10px; font-weight: bold; white-space: nowrap;">JUMP:</span>
+                        <select id="cam-screen-jump-sel" class="port-sel" style="flex:1; min-width: 0; font-size: 10px; padding: 2px 4px; height: 24px;" onchange="jumpCamScreen(this.value)">
                             <option value="9">9: USB Webcam (PC Live Stream)</option>
                             <option value="0">0: Viewfinder (TFT Display)</option>
                             <option value="1">1: Main Menu</option>
@@ -1121,9 +1497,23 @@
                         </select>
                     </div>
 
+                    <!-- Row 6: ESP-IDF Power & Thermal Management Controls (Clean & Contained) -->
+                    <div style="display: flex; align-items: center; width: 100%; gap: 5px; margin-top: 2px;">
+                        <span style="color: var(--accent-yellow); font-size: 10px; font-weight: bold; white-space: nowrap;"><i class="fas fa-bolt"></i> PWR:</span>
+                        <select id="pwr-profile-sel" class="port-sel" style="flex: 1; min-width: 0; font-size: 10px; padding: 2px 4px; height: 24px;" onchange="setCamPowerProfile(this.value)">
+                            <option value="AUTO">⚡ Auto (DFS)</option>
+                            <option value="PERF">🚀 Perf (240MHz)</option>
+                            <option value="BALANCED">⚖️ Bal (160MHz)</option>
+                            <option value="ECO">🍃 Eco (80MHz)</option>
+                        </select>
+                        <button class="c-btn" style="flex-shrink: 0; padding: 2px 8px; font-size: 10px; height: 24px; background: rgba(157,78,221,0.25); border-color: rgba(157,78,221,0.5); color: #d8b4fe;" onclick="camEnterLightSleep()" title="Enter ESP-IDF Light Sleep Mode">
+                            <i class="fas fa-moon"></i> Sleep
+                        </button>
+                    </div>
+
                     <!-- Keyboard Quick Map Help -->
-                    <div style="font-size: 10px; color: var(--text-dim); text-align: center; margin-top: 4px; line-height: 1.4;">
-                        Keys: <span class="kbd-pill">W</span> <span class="kbd-pill">S</span> Nav &bull; <span class="kbd-pill">Enter</span> OK &bull; <span class="kbd-pill">Esc</span> Back &bull; <span class="kbd-pill">R</span> Rec &bull; <span class="kbd-pill">F</span> Flip
+                    <div style="font-size: 9px; color: var(--text-dim); text-align: center; margin-top: 2px; line-height: 1.3;">
+                        Keys: <span class="kbd-pill">W</span><span class="kbd-pill">S</span> Nav &bull; <span class="kbd-pill">Enter</span> OK &bull; <span class="kbd-pill">Esc</span> Back &bull; <span class="kbd-pill">R</span> Rec &bull; <span class="kbd-pill">F</span> Flip
                     </div>
                 </div>
 
@@ -1155,11 +1545,22 @@
                 <div id="tab-tuning" class="tab-panel active">
                     <div class="card-grid">
 
-                        <!-- Camera Parameters Tuning Card -->
+                        <!-- Camera Parameters Tuning Card (With Live FPS & Sensor Stats Beside Xiao Sense) -->
                         <div class="dash-card">
-                            <div class="dash-card-title">
+                            <div class="dash-card-title" style="display: flex; justify-content: space-between; align-items: center;">
                                 <span><i class="fas fa-camera-retro"></i> OV3660 Camera Sensor Tuning</span>
-                                <span style="font-size: 11px; color: var(--primary);">Real-time</span>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span class="dash-badge" style="background: rgba(0,230,118,0.15); color: #00e676; border-color: rgba(0,230,118,0.4); font-size: 11px; font-weight: 700; padding: 2px 8px;" id="studio-fps-badge"><i class="fas fa-bolt"></i> <span id="studio-fps-val">--</span> FPS</span>
+                                    <span class="dash-badge">Real-time</span>
+                                </div>
+                            </div>
+
+                            <!-- Live Telemetry Status Bar Beside Xiao Sense -->
+                            <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(0,212,255,0.25); border-radius: 6px; padding: 6px 12px; margin: 8px 0 12px; display: flex; align-items: center; justify-content: space-between; font-family: 'Share Tech Mono', monospace; font-size: 11px; flex-wrap: wrap; gap: 6px;">
+                                <div><i class="fas fa-video" style="color: var(--primary);"></i> RES: <span id="studio-live-res" style="color: #fff; font-weight: bold;">SVGA (800x600)</span></div>
+                                <div><i class="fas fa-tachometer-alt" style="color: #00e676;"></i> STREAM: <span id="studio-live-fps" style="color: #00e676; font-weight: bold;">-- FPS</span></div>
+                                <div><i class="fas fa-microchip" style="color: var(--accent-yellow);"></i> HW CAPTURE: <span id="studio-hw-fps" style="color: var(--accent-yellow); font-weight: bold;">-- FPS</span></div>
+                                <div><i class="fas fa-thermometer-half" style="color: #ff3d71;"></i> TEMP: <span id="studio-cam-temp" style="color: #ff3d71; font-weight: bold;">--°C</span></div>
                             </div>
 
                             <!-- Resolution / Frame Size -->
@@ -1304,6 +1705,23 @@
                 <!-- TAB 3: MAIN DEVICE TELEMETRY -->
                 <div id="tab-main-tele" class="tab-panel">
                     <div class="card-grid">
+                        <!-- Walkie-Talkie Complete 29 Module Interactive Launcher Card -->
+                        <div class="dash-card" style="grid-column: 1 / -1;">
+                            <div class="dash-card-title">
+                                <span><i class="fas fa-th-large" style="color: var(--accent-purple);"></i> Walkie-Talkie App Modules & Menu Launcher (29 Modules)</span>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <input type="text" id="module-search-box" placeholder="Filter modules..." oninput="filterModules(this.value)" style="background: #080c14; border: 1px solid #222b3d; color: #fff; padding: 3px 8px; border-radius: 4px; font-size: 11px; outline: none; width: 140px;">
+                                    <span id="active-mod-indicator" style="font-size: 11px; color: var(--accent-green); font-family: monospace; font-weight: bold; background: rgba(0,230,118,0.12); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(0,230,118,0.3);">ACTIVE: MODE 0</span>
+                                </div>
+                            </div>
+                            <div style="font-size: 11px; color: var(--text-muted); line-height: 1.4;">
+                                Click any module to remotely trigger and activate it on the physical Walkie-Talkie device. Live status syncs across both twins.
+                            </div>
+                            <div class="module-launcher-grid" id="main-modules-grid">
+                                <!-- Populated automatically with all 29 modules by JS -->
+                            </div>
+                        </div>
+
                         <div class="dash-card">
                             <div class="dash-card-title">
                                 <span><i class="fas fa-battery-half"></i> System Power & Mode</span>
@@ -1442,12 +1860,23 @@
 
     <!-- ─── CLIENT-SIDE SCRIPT & EVENT SYSTEM ─────────────────────────── -->
     <script>
+        let streamErrRetry = null;
+        function handleStreamErr(img) {
+            if (!img) return;
+            if (streamErrRetry) clearTimeout(streamErrRetry);
+            streamErrRetry = setTimeout(() => {
+                if (img) img.src = "/video_feed?t=" + Date.now();
+            }, 1200);
+        }
+
         let evtSource = null;
         let isCamConn = false;
         let isMainConn = false;
         let camFsCurrentPath = "/";
         let camRecording = false;
         let camRotation = 0;
+        let currentCamScreen = 0;
+        let controlTarget = 'wt'; // 'wt' (Walkie-Talkie) or 'cam' (XIAO Camera)
 
         // Initialize 48 Spectrum Bars for Camera
         const specContainer = document.getElementById('spectrum-bars');
@@ -1497,7 +1926,10 @@
                     isCamConn = true;
                     updateCamBadge(true);
                     ensureStreamListening();
-                    setTimeout(refreshCamStream, 500);
+                    // Kick off stream immediately and sync image
+                    fetch('/cmd/cam/stream/start', {method: 'POST'}).catch(()=>{});
+                    setTimeout(refreshCamStream, 400);
+                    setTimeout(refreshCamStream, 1200);
                     setTimeout(() => refreshCamFs(), 1500);
                 } else {
                     alert("Failed to connect Camera on " + port + ":\n" + res.error);
@@ -1589,27 +2021,49 @@
             }
         }
 
-        // SSE Real-Time Stream Listener
+        // SSE Real-Time Stream Listener with Auto-Reconnect & Fallback
+        let sseReconnectTimer = null;
         function ensureStreamListening() {
-            if (evtSource) return;
+            if (evtSource && (evtSource.readyState === 0 || evtSource.readyState === 1)) {
+                return;
+            }
+            if (evtSource) {
+                try { evtSource.close(); } catch(e) {}
+            }
             evtSource = new EventSource('/stream');
             evtSource.onmessage = function(e) {
                 try {
                     const data = JSON.parse(e.data);
                     handleTelemetry(data);
-                } catch(err) {}
+                } catch(err) {
+                    console.error("Telemetry parse error:", err);
+                }
             };
             evtSource.onerror = function() {
-                // Reconnect automatically
+                if (evtSource) {
+                    try { evtSource.close(); } catch(e) {}
+                    evtSource = null;
+                }
+                // Fallback fetch
+                fetch('/api/telemetry').then(r => r.json()).then(handleTelemetry).catch(()=>{});
+                if (!sseReconnectTimer) {
+                    sseReconnectTimer = setTimeout(() => {
+                        sseReconnectTimer = null;
+                        ensureStreamListening();
+                    }, 2000);
+                }
             };
         }
 
         // Global Telemetry Dispatcher
         function handleTelemetry(data) {
-            // Update raw display
-            document.getElementById('raw-json-display').innerText = JSON.stringify(data, null, 2);
+            if (!data) return;
 
-            // Update Cam connection status from server
+            // Update raw display
+            const rawEl = document.getElementById('raw-json-display');
+            if (rawEl) rawEl.innerText = JSON.stringify(data, null, 2);
+
+            // Update Cam & Main connection badges
             if (data.cam_connected !== undefined && data.cam_connected !== isCamConn) {
                 isCamConn = data.cam_connected;
                 updateCamBadge(isCamConn);
@@ -1619,89 +2073,149 @@
                 updateMainBadge(isMainConn);
             }
 
-            // 1. Camera Twin Display & HUD
-            if (data.fps !== undefined || data.espnow_active) {
-                const fpsVal = parseFloat(data.fps) || (data.espnow_active ? parseFloat(data.espnow_rx_fps || 15) : 0);
+            // 1. Camera Twin Display & Prominent Live FPS
+            try {
+                const isFreshVideo = !!data.video_fresh;
+                const streamFps = parseFloat(data.stream_fps) || 0;
+                const camHwFps = parseFloat(data.cam_fps !== undefined ? data.cam_fps : data.fps) || 0;
+                const activeFps = streamFps > 0 ? streamFps : camHwFps;
+                const dispFpsStr = activeFps > 0 ? activeFps.toFixed(1) : (isFreshVideo ? "10.0" : "0.0");
+                const hwFpsStr = camHwFps > 0 ? Math.round(camHwFps).toString() : (streamFps > 0 ? Math.round(streamFps).toString() : "0");
+
+                // Badge in Seeed Xiao Sense case top header
+                const elHdrFps = document.getElementById('cam-hdr-fps-val');
+                if (elHdrFps) elHdrFps.innerText = dispFpsStr;
+
+                // Viewfinder HUD overlay
                 const hudFps = document.getElementById('hud-cam-fps');
-                const statFps = document.getElementById('cam-stat-fps');
-                const pausedBanner = document.getElementById('vf-paused-banner');
-
-                if (data.espnow_active || (currentCamScreen === 5 && fpsVal > 0)) {
-                    const dispFps = fpsVal > 0 ? fpsVal.toFixed(1) : "15.0";
-                    if (hudFps) { hudFps.innerText = "TX " + dispFps + " FPS"; hudFps.style.color = "#00e676"; }
-                    if (statFps) statFps.innerText = `ESP-NOW Live TX: ${dispFps} fps`;
-                    if (pausedBanner) pausedBanner.style.display = "none";
-                } else if (fpsVal > 0) {
-                    if (hudFps) { hudFps.innerText = Math.round(fpsVal) + " FPS"; hudFps.style.color = "#00e676"; }
-                    if (statFps) statFps.innerText = `FPS: ${Math.round(fpsVal)} (Live)`;
-                    if (pausedBanner) pausedBanner.style.display = "none";
-
-                    // Auto-sync viewfinder image if stalled or zero dimensions
-                    const vfImg = document.getElementById('cam-feed-img');
-                    if (vfImg && vfImg.naturalWidth === 0 && !window._camSyncing) {
-                        window._camSyncing = true;
-                        vfImg.src = "/video_feed?t=" + Date.now();
-                        setTimeout(() => { window._camSyncing = false; }, 2000);
+                if (hudFps) {
+                    if (data.espnow_active || (currentCamScreen === 5 && activeFps > 0)) {
+                        hudFps.innerText = "TX " + dispFpsStr + " FPS";
+                        hudFps.style.color = "#00e676";
+                    } else if (isFreshVideo || activeFps > 0) {
+                        hudFps.innerText = dispFpsStr + " FPS";
+                        hudFps.style.color = "#00e676";
+                    } else if (isCamConn) {
+                        hudFps.innerText = "READY";
+                        hudFps.style.color = "var(--primary)";
+                    } else {
+                        hudFps.innerText = "OFFLINE";
+                        hudFps.style.color = "#ffb703";
                     }
-                } else {
-                    if (hudFps) { hudFps.innerText = isCamConn ? "PAUSED" : "OFFLINE"; hudFps.style.color = "#ffb703"; }
-                    if (statFps) statFps.innerText = `FPS: 0 (${isCamConn ? 'Paused' : 'Offline'})`;
-                    if (pausedBanner && isCamConn) pausedBanner.style.display = "flex";
                 }
-            }
-            if (data.screen !== undefined) {
-                currentCamScreen = data.screen;
-                const jumpSel = document.getElementById('cam-screen-jump-sel');
-                if (jumpSel && document.activeElement !== jumpSel) {
-                    jumpSel.value = data.screen;
-                }
-            }
-            if (data.screenName) {
-                document.getElementById('hud-cam-mode').innerText = data.screenName;
-                document.getElementById('cam-menu-title').innerText = "SCR: " + data.screenName;
-            }
-            if (data.recording !== undefined) {
-                camRecording = !!data.recording;
-                const recHud = document.getElementById('hud-cam-rec');
-                const recBtn = document.getElementById('btn-cam-rec');
-                const camLed = document.getElementById('cam-led-indicator');
-                recHud.style.display = camRecording ? "inline" : "none";
-                if (camRecording) {
-                    recBtn.classList.add('active');
-                    camLed.className = 'cam-led-status rec';
-                } else {
-                    recBtn.classList.remove('active');
-                    if (isCamConn) camLed.className = 'cam-led-status on';
-                }
-            }
-            if (data.heap !== undefined) {
-                document.getElementById('cam-stat-heap').innerText = "Heap: " + Math.round(data.heap / 1024) + " KB";
-            }
-            if (data.psram !== undefined) {
-                document.getElementById('cam-stat-psram').innerText = "PSRAM: " + (data.psram / (1024*1024)).toFixed(1) + " MB";
-            }
-            if (data.rotation !== undefined) {
-                camRotation = data.rotation;
-                document.getElementById('cam-menu-rot').innerText = `Rotation: ${camRotation}° ${camRotation === 0 ? '(180° Inverted)' : '(Default)'}`;
-            }
 
-            // Core temperatures for both devices
-            if (data.cam_core_temp !== undefined || data.coreTemp !== undefined) {
-                const ct = data.cam_core_temp !== undefined ? data.cam_core_temp : data.coreTemp;
-                if (ct !== null && ct !== undefined) {
-                    const text = `${parseFloat(ct).toFixed(0)}°C`;
-                    const elHdr = document.getElementById('cam-hdr-temp');
-                    const elStat = document.getElementById('cam-stat-temp');
-                    if (elHdr) elHdr.innerHTML = `<i class="fas fa-thermometer-half"></i> ${text}`;
-                    if (elStat) elStat.innerText = `Core: ${text}`;
+                // Stats panel below viewfinder
+                const elStatStream = document.getElementById('cam-stat-stream-val');
+                if (elStatStream) elStatStream.innerText = dispFpsStr;
+                const elStatHw = document.getElementById('cam-stat-hw-val');
+                if (elStatHw) elStatHw.innerText = hwFpsStr;
+
+                // Camera Studio sensor tuning stats (beside Seeed Xiao Sense)
+                const elStudioFpsBadge = document.getElementById('studio-fps-val');
+                if (elStudioFpsBadge) elStudioFpsBadge.innerText = dispFpsStr;
+                const elStudioLiveFps = document.getElementById('studio-live-fps');
+                if (elStudioLiveFps) elStudioLiveFps.innerText = dispFpsStr + " FPS";
+                const elStudioHwFps = document.getElementById('studio-hw-fps');
+                if (elStudioHwFps) elStudioHwFps.innerText = hwFpsStr + " FPS";
+
+                const pausedBanner = document.getElementById('vf-paused-banner');
+                if (pausedBanner) {
+                    pausedBanner.style.display = (isFreshVideo || activeFps > 0) ? "none" : (isCamConn ? "none" : "flex");
                 }
-            }
-            if (data.main_core_temp !== undefined) {
-                const mt = data.main_core_temp;
-                if (mt !== null && mt !== undefined) {
+
+                if (data.screen !== undefined || data.cam_screen !== undefined) {
+                    currentCamScreen = data.cam_screen !== undefined ? data.cam_screen : data.screen;
+                    const jumpSel = document.getElementById('cam-screen-jump-sel');
+                    if (jumpSel && document.activeElement !== jumpSel) {
+                        jumpSel.value = currentCamScreen;
+                    }
+                }
+                if (data.screenName || data.cam_screenName) {
+                    const sName = data.cam_screenName || data.screenName;
+                    const hudMode = document.getElementById('hud-cam-mode');
+                    if (hudMode) hudMode.innerText = sName;
+                    const menuTitle = document.getElementById('cam-menu-title');
+                    if (menuTitle) menuTitle.innerText = "SCR: " + sName;
+                }
+                if (data.recording !== undefined || data.cam_recording !== undefined) {
+                    camRecording = !!(data.cam_recording !== undefined ? data.cam_recording : data.recording);
+                    const recHud = document.getElementById('hud-cam-rec');
+                    const recBtn = document.getElementById('btn-cam-rec');
+                    const camLed = document.getElementById('cam-led-indicator');
+                    if (recHud) recHud.style.display = camRecording ? "inline" : "none";
+                    if (recBtn) {
+                        if (camRecording) recBtn.classList.add('active');
+                        else recBtn.classList.remove('active');
+                    }
+                    if (camLed) {
+                        if (camRecording) camLed.className = 'cam-led-status rec';
+                        else if (isCamConn) camLed.className = 'cam-led-status on';
+                        else camLed.className = 'cam-led-status';
+                    }
+                }
+                const heapVal = data.cam_heap !== undefined ? data.cam_heap : data.heap;
+                if (heapVal !== undefined && heapVal > 0) {
+                    const elHeap = document.getElementById('cam-stat-heap');
+                    if (elHeap) elHeap.innerText = "Heap: " + Math.round(heapVal / 1024) + " KB";
+                }
+                const psramVal = data.cam_psram !== undefined ? data.cam_psram : data.psram;
+                if (psramVal !== undefined && psramVal > 0) {
+                    const elPsram = document.getElementById('cam-stat-psram');
+                    if (elPsram) elPsram.innerText = "PSRAM: " + (psramVal / (1024*1024)).toFixed(1) + " MB";
+                }
+                if (data.rotation !== undefined || data.cam_rotation !== undefined) {
+                    camRotation = data.cam_rotation !== undefined ? data.cam_rotation : data.rotation;
+                    const elRot = document.getElementById('cam-menu-rot');
+                    if (elRot) elRot.innerText = `Rotation: ${camRotation}° ${camRotation === 0 ? '(180° Inverted)' : '(Default)'}`;
+                }
+
+                // Core temperatures for both devices
+                const camTemp = data.cam_core_temp !== undefined ? data.cam_core_temp : data.coreTemp;
+                if (camTemp !== null && camTemp !== undefined && camTemp > 0) {
+                    const tempText = `${parseFloat(camTemp).toFixed(0)}°C`;
+                    const elHdr = document.getElementById('cam-hdr-temp');
+                    const elHdrVal = document.getElementById('cam-hdr-temp-val');
+                    const elStatVal = document.getElementById('cam-stat-temp-val');
+                    const elStudioTemp = document.getElementById('studio-cam-temp');
+
+                    if (elHdrVal) elHdrVal.innerText = parseFloat(camTemp).toFixed(0);
+                    else if (elHdr) elHdr.innerHTML = `<i class="fas fa-thermometer-half"></i> ${tempText}`;
+                    if (elStatVal) elStatVal.innerText = parseFloat(camTemp).toFixed(0);
+                    if (elStudioTemp) elStudioTemp.innerText = tempText;
+                }
+
+                // Power & Clock Frequency
+                const cpuVal = data.cam_cpuMhz !== undefined ? data.cam_cpuMhz : data.cpuMhz;
+                if (cpuVal !== undefined && cpuVal > 0) {
+                    const elCpu = document.getElementById('cam-stat-cpu');
+                    if (elCpu) {
+                        const prof = data.cam_pwrProfile || data.pwrProfile || 'AUTO';
+                        const isThrottled = data.cam_throttled === true || data.throttled === true || data.throttled === "true";
+                        elCpu.innerText = `CPU: ${cpuVal} MHz (${prof})${isThrottled ? ' [THROTTLED]' : ''}`;
+                        elCpu.style.color = isThrottled ? 'var(--accent-red)' : (cpuVal <= 80 ? 'var(--accent-green)' : (cpuVal <= 160 ? 'var(--primary)' : 'var(--accent-yellow)'));
+                    }
+                    const elProfSel = document.getElementById('pwr-profile-sel');
+                    if (elProfSel && document.activeElement !== elProfSel && (data.cam_pwrProfile || data.pwrProfile)) {
+                        elProfSel.value = data.cam_pwrProfile || data.pwrProfile;
+                    }
+                }
+                if (data.main_core_temp !== undefined && data.main_core_temp !== null) {
+                    const mt = data.main_core_temp;
                     const elWt = document.getElementById('wt-hdr-temp');
                     if (elWt) elWt.innerHTML = `<i class="fas fa-thermometer-half"></i> ${parseFloat(mt).toFixed(0)}°C`;
                 }
+
+                // Resolution names
+                const resSelect = document.getElementById('cam-res-select');
+                if (resSelect && resSelect.options[resSelect.selectedIndex]) {
+                    const rText = resSelect.options[resSelect.selectedIndex].text;
+                    const elHudRes = document.getElementById('hud-cam-res');
+                    if (elHudRes) elHudRes.innerText = rText.split(' ')[0];
+                    const elStudioRes = document.getElementById('studio-live-res');
+                    if (elStudioRes) elStudioRes.innerText = rText;
+                }
+            } catch(camErr) {
+                console.error("Camera telemetry render error:", camErr);
             }
 
             // 2. Camera Microphone Level & Spectrum (PDM Mic)
@@ -1789,21 +2303,46 @@
             updateVirtualTFT(data);
         }
 
-        const APP_MODE_NAMES = {
-            0: "GPS NAVIGATOR", 1: "IMU SENSOR", 2: "ENVIRONMENT", 3: "COMM PROTOCOL",
-            4: "SATELLITE", 5: "RADAR TRACKER", 6: "SPECTRUM", 7: "POWER STATS",
-            8: "AUDIO ENGINE", 9: "RECORDINGS", 10: "SETTINGS", 11: "SYSTEM INFO",
-            12: "SD EXPLORER", 13: "USB MIC", 14: "BT AUDIO", 15: "MESH NET", 16: "LIVE RADIO",
-            17: "LIVE VIDEO (ESP-NOW)", 22: "CLOCK / IDLE"
-        };
-        const MENU_NAMES = [
-            "GPS", "IMU", "ENV", "COMM", "SAT", "RADAR", "SPEC", "PWR",
-            "AUDIO", "REC", "SET", "SYS", "SD", "MIC", "BT", "MESH", "RADIO"
+        const MAIN_MODULES = [
+            { id: 0, name: "GPS MONITOR", short: "GPS", icon: "fa-location-arrow", cat: "Navigation" },
+            { id: 1, name: "IMU 6-AXIS", short: "IMU", icon: "fa-cube", cat: "Sensors" },
+            { id: 2, name: "HEALTH MONITOR", short: "HEALTH", icon: "fa-heartbeat", cat: "Sensors" },
+            { id: 3, name: "DIGITAL COMPASS", short: "COMPASS", icon: "fa-compass", cat: "Navigation" },
+            { id: 4, name: "BMP280 BAROMETER", short: "BMP280", icon: "fa-tachometer-alt", cat: "Sensors" },
+            { id: 5, name: "SD STORAGE", short: "SD CARD", icon: "fa-sd-card", cat: "System" },
+            { id: 6, name: "TEMP & HUMIDITY", short: "TH SENSOR", icon: "fa-temperature-high", cat: "Sensors" },
+            { id: 7, name: "THERMAL IMAGER", short: "THERMAL", icon: "fa-fire", cat: "Sensors" },
+            { id: 8, name: "AUDIO ENGINE", short: "AUDIO", icon: "fa-music", cat: "Media" },
+            { id: 9, name: "USB OTG MSC", short: "USB OTG", icon: "fa-usb", cat: "Connectivity" },
+            { id: 10, name: "SPECTRUM ANALYZER", short: "ANALYZER", icon: "fa-chart-area", cat: "RF / Media" },
+            { id: 11, name: "AIR MOUSE / HID", short: "AIR MOUSE", icon: "fa-mouse-pointer", cat: "Controls" },
+            { id: 12, name: "ESP-NOW COMM", short: "ESPNOW", icon: "fa-wifi", cat: "Wireless" },
+            { id: 13, name: "USB MIC & AUDIO", short: "USB MIC", icon: "fa-microphone-alt", cat: "Media" },
+            { id: 14, name: "WALKIE-TALKIE PTT", short: "WALKIE", icon: "fa-walkie-talkie", cat: "RF / Comm" },
+            { id: 15, name: "SYSTEM UTILITIES", short: "UTILITY", icon: "fa-tools", cat: "System" },
+            { id: 16, name: "LIVE RF RADIO", short: "LIVE RADIO", icon: "fa-broadcast-tower", cat: "RF / Comm" },
+            { id: 17, name: "LIVE VIDEO (ESP-NOW)", short: "LIVE VIDEO", icon: "fa-video", cat: "Wireless" },
+            { id: 18, name: "OFFLINE MAP", short: "MAP", icon: "fa-map-marked-alt", cat: "Navigation" },
+            { id: 19, name: "WAYPOINT NAV", short: "NAVIGATION", icon: "fa-route", cat: "Navigation" },
+            { id: 20, name: "INTERNET RADIO", short: "NET RADIO", icon: "fa-satellite-dish", cat: "Media" },
+            { id: 21, name: "RETRO GAMES", short: "GAMES", icon: "fa-gamepad", cat: "Apps" },
+            { id: 22, name: "E-BOOK READER", short: "E-BOOK", icon: "fa-book-open", cat: "Apps" },
+            { id: 23, name: "WIFI SCANNER", short: "WIFI", icon: "fa-network-wired", cat: "Wireless" },
+            { id: 24, name: "WARDRIVING / APs", short: "WARDRIVE", icon: "fa-car-side", cat: "Wireless" },
+            { id: 25, name: "GROUND CONTROL GCS", short: "GCS", icon: "fa-plane-departure", cat: "Navigation" },
+            { id: 26, name: "WIFI VIDEO STREAM", short: "WIFI STREAM", icon: "fa-tower-broadcast", cat: "Wireless" },
+            { id: 27, name: "ADVANCED CONFIG", short: "ADVANCED", icon: "fa-sliders-h", cat: "System" },
+            { id: 28, name: "BLE RADAR SCANNER", short: "BLE RADAR", icon: "fa-bluetooth-b", cat: "Wireless" }
         ];
-        const MENU_ICONS = [
-            "fa-location-arrow", "fa-compass", "fa-leaf", "fa-wifi", "fa-satellite", "fa-crosshairs", "fa-chart-bar", "fa-battery-full",
-            "fa-music", "fa-microphone", "fa-cog", "fa-info-circle", "fa-folder-open", "fa-podcast", "fa-bluetooth", "fa-project-diagram", "fa-broadcast-tower"
-        ];
+
+        const APP_MODE_NAMES = {};
+        const MENU_NAMES = [];
+        const MENU_ICONS = [];
+        MAIN_MODULES.forEach(m => {
+            APP_MODE_NAMES[m.id] = m.name;
+            MENU_NAMES[m.id] = m.short;
+            MENU_ICONS[m.id] = m.icon;
+        });
         const CHANNELS = ["433.050", "433.250", "433.500", "433.750"];
 
         function updateVirtualTFT(state) {
@@ -1812,6 +2351,17 @@
             const vBatt = state.vBatt !== undefined ? state.vBatt : (state.main_vBatt || 0.0);
             const menuSel = state.menuSel !== undefined ? state.menuSel : (state.main_menuSel || 0);
             const lrPttHeld = !!(state.lrPttHeld || state.main_lrPttHeld);
+
+            // Sync active mode indicator and quick selector
+            const curModeTag = document.getElementById('wt-current-mode-tag');
+            if (curModeTag) curModeTag.innerText = `MODE ${appMode}: ${MENU_NAMES[appMode] || 'APP'}`;
+            const actInd = document.getElementById('active-mod-indicator');
+            if (actInd) actInd.innerText = `ACTIVE: #${appMode} ${APP_MODE_NAMES[appMode] || 'MODULE'}`;
+            const qSel = document.getElementById('wt-quick-mode-sel');
+            if (qSel && document.activeElement !== qSel && qSel.value != appMode) {
+                qSel.value = appMode;
+            }
+            updateModuleGridActive(appMode);
 
             const hdrBatt = document.getElementById('wt-hdr-batt');
             const hdrTitle = document.getElementById('wt-hdr-title');
@@ -1849,16 +2399,26 @@
                 if (ftrM) ftrM.innerText = "ENTER";
                 if (ftrR) ftrR.innerText = "NEXT";
                 
-                let html = '<div class="menu-grid">';
-                let sel = menuSel;
-                let startIdx = Math.max(0, sel - 4);
-                if (startIdx > MENU_NAMES.length - 9) startIdx = Math.max(0, MENU_NAMES.length - 9);
+                let sel = Math.max(0, Math.min(MENU_NAMES.length - 1, menuSel));
+                let pageNum = Math.floor(sel / 9) + 1;
+                let totalPages = Math.ceil(MENU_NAMES.length / 9);
+                let startIdx = Math.floor(sel / 9) * 9;
                 
+                let html = `<div style="display:flex; justify-content:space-between; font-size:9px; color:#88a0c0; margin-bottom:4px; padding:0 2px;">
+                    <span>MODULES (${sel + 1}/${MENU_NAMES.length})</span>
+                    <span>PAGE ${pageNum}/${totalPages}</span>
+                </div>`;
+                html += '<div class="menu-grid">';
                 for (let i = 0; i < 9; i++) {
                     let idx = startIdx + i;
                     if (idx < MENU_NAMES.length) {
                         let active = (idx === sel) ? "active" : "";
-                        html += `<div class="menu-icon ${active}"><i class="fas ${MENU_ICONS[idx]}"></i><span>${MENU_NAMES[idx]}</span></div>`;
+                        html += `<div class="menu-icon ${active}" onclick="setMainMode(${idx})" style="cursor:pointer;" title="Click to Launch #${idx}: ${MENU_NAMES[idx]}">
+                            <i class="fas ${MENU_ICONS[idx]}"></i>
+                            <span style="font-size:8.5px; font-weight:600;">${MENU_NAMES[idx]}</span>
+                        </div>`;
+                    } else {
+                        html += `<div class="menu-icon" style="opacity:0.2;"><i class="fas fa-ellipsis-h"></i></div>`;
                     }
                 }
                 html += '</div>';
@@ -2106,6 +2666,11 @@
             });
         }
 
+        function sendMainBtnPulse(val) {
+            sendMainBtn(val, 1);
+            setTimeout(() => sendMainBtn(val, 0), 120);
+        }
+
         function toggleDisplayFlip() {
             const newRot = (camRotation === 0) ? 2 : 0;
             fetch('/api/cam/set', {
@@ -2174,6 +2739,25 @@
             });
         }
 
+        // ESP-IDF Power & Thermal Management API Calls
+        function setCamPowerProfile(profile) {
+            fetch('/cmd/cam', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({cmd: 'PWR_SET_PROFILE', profile: profile})
+            });
+        }
+
+        function camEnterLightSleep() {
+            if (confirm("Put XIAO ESP32-S3 into ESP-IDF Light Sleep?\\n\\nDisplay will sleep to save power and reduce heat.\\nPress any button on the device to wake up.")) {
+                fetch('/cmd/cam', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({cmd: 'PWR_SLEEP', mode: 'LIGHT'})
+                });
+            }
+        }
+
         function setAudioGain(gain, target = 'cam') {
             fetch('/api/audio/gain', {
                 method: 'POST',
@@ -2195,20 +2779,111 @@
         }
 
         function setMainMode(mode) {
+            const mId = parseInt(mode);
             fetch('/cmd/main', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({cmd: "SET_MODE", val: parseInt(mode)})
+                body: JSON.stringify({cmd: "SET_MODE", val: mId})
             }).then(() => {
                 // If entering USB Audio mode (13), automatically trigger mic activation
-                if (parseInt(mode) === 13) {
+                if (mId === 13) {
                     setTimeout(toggleMainMic, 450);
                 }
             });
+            // Snappy local UI update
+            updateModuleGridActive(mId);
+            const qSel = document.getElementById('wt-quick-mode-sel');
+            if (qSel && qSel.value != mId) qSel.value = mId;
+            const curModeTag = document.getElementById('wt-current-mode-tag');
+            if (curModeTag) curModeTag.innerText = `MODE ${mId}: ${MENU_NAMES[mId] || 'APP'}`;
+            const actInd = document.getElementById('active-mod-indicator');
+            if (actInd) actInd.innerText = `ACTIVE: #${mId} ${APP_MODE_NAMES[mId] || 'MODULE'}`;
+        }
+
+        // Walkie-Talkie Module Grid Helpers
+        function initWalkieModules() {
+            const qSel = document.getElementById('wt-quick-mode-sel');
+            if (qSel) {
+                let opts = '<option value="">-- Jump to Any Module (0-28) --</option>';
+                MAIN_MODULES.forEach(m => {
+                    opts += `<option value="${m.id}">[#${m.id < 10 ? '0' + m.id : m.id}] ${m.short} — ${m.name}</option>`;
+                });
+                qSel.innerHTML = opts;
+            }
+            renderMainModulesGrid(0);
+        }
+
+        function renderMainModulesGrid(activeId) {
+            const grid = document.getElementById('main-modules-grid');
+            if (!grid) return;
+            let html = '';
+            MAIN_MODULES.forEach(m => {
+                const isActive = (m.id === activeId);
+                html += `
+                    <div class="module-card ${isActive ? 'active' : ''}" id="mod-card-${m.id}" onclick="setMainMode(${m.id})" title="Launch #${m.id} ${m.name}">
+                        <span class="mod-num">#${m.id < 10 ? '0' + m.id : m.id}</span>
+                        <span class="mod-badge" id="mod-badge-${m.id}">${isActive ? 'ACTIVE' : m.cat}</span>
+                        <i class="fas ${m.icon} mod-icon"></i>
+                        <span class="mod-name">${m.name}</span>
+                        <span class="mod-cat">${m.short}</span>
+                    </div>
+                `;
+            });
+            grid.innerHTML = html;
+        }
+
+        function updateModuleGridActive(activeId) {
+            document.querySelectorAll('.module-card').forEach(c => c.classList.remove('active'));
+            MAIN_MODULES.forEach(m => {
+                const badge = document.getElementById(`mod-badge-${m.id}`);
+                if (badge) badge.innerText = (m.id === activeId) ? 'ACTIVE' : m.cat;
+            });
+            const activeCard = document.getElementById(`mod-card-${activeId}`);
+            if (activeCard) activeCard.classList.add('active');
+        }
+
+        function filterModules(q) {
+            const query = (q || '').toLowerCase().trim();
+            MAIN_MODULES.forEach(m => {
+                const card = document.getElementById(`mod-card-${m.id}`);
+                if (!card) return;
+                const match = !query || 
+                              m.name.toLowerCase().includes(query) || 
+                              m.short.toLowerCase().includes(query) || 
+                              m.cat.toLowerCase().includes(query) || 
+                              m.id.toString() === query;
+                card.style.display = match ? 'flex' : 'none';
+            });
+        }
+
+        // Layout View Switcher & Control Target
+        let activeWorkspaceView = 'all';
+        function setWorkspaceView(view) {
+            activeWorkspaceView = view;
+            const ws = document.querySelector('.workspace');
+            if (!ws) return;
+            ws.classList.remove('focus-wt', 'focus-cam', 'focus-studio');
+            if (view === 'wt') ws.classList.add('focus-wt');
+            else if (view === 'cam') ws.classList.add('focus-cam');
+            else if (view === 'studio') ws.classList.add('focus-studio');
+
+            document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+            const btn = document.getElementById(`vbtn-${view}`);
+            if (btn) btn.classList.add('active');
+        }
+
+        function setControlTarget(target) {
+            controlTarget = target;
+            const btnCam = document.getElementById('tgt-cam');
+            const btnWt = document.getElementById('tgt-wt');
+            if (btnCam) btnCam.classList.toggle('active', target === 'cam');
+            if (btnWt) btnWt.classList.toggle('active', target === 'wt');
         }
 
         // Camera SD Card File Manager
         function refreshCamFs() {
+            const listEl = document.getElementById('cam-file-list');
+            if (listEl) listEl.innerHTML = '<tr><td colspan="3" style="text-align:center; padding: 20px; color: var(--primary);"><i class="fas fa-spinner fa-spin"></i> Reading SD Card...</td></tr>';
             fetch('/api/fs/ls', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -2216,9 +2891,13 @@
             })
             .then(r => r.json())
             .then(res => {
-                if (res.error) return;
+                if (res.error) {
+                    if (listEl) listEl.innerHTML = `<tr><td colspan="3" style="text-align:center; padding: 20px; color: var(--danger);"><i class="fas fa-exclamation-triangle"></i> ${res.error}</td></tr>`;
+                    return;
+                }
                 camFsCurrentPath = res.path || "/";
-                document.getElementById('fs-path-display').innerText = camFsCurrentPath;
+                const pathEl = document.getElementById('fs-path-display');
+                if (pathEl) pathEl.innerText = camFsCurrentPath;
                 let html = "";
                 const files = res.files || [];
                 files.sort((a,b) => b.isDir - a.isDir || a.name.localeCompare(b.name)).forEach(f => {
@@ -2235,8 +2914,11 @@
                         </tr>
                     `;
                 });
-                if (files.length === 0) html = '<tr><td colspan="3" style="text-align:center; padding: 20px;">Directory is empty</td></tr>';
-                document.getElementById('cam-file-list').innerHTML = html;
+                if (files.length === 0) html = '<tr><td colspan="3" style="text-align:center; padding: 20px; color: var(--text-muted);">Directory is empty</td></tr>';
+                if (listEl) listEl.innerHTML = html;
+            })
+            .catch(err => {
+                if (listEl) listEl.innerHTML = `<tr><td colspan="3" style="text-align:center; padding: 20px; color: var(--danger);"><i class="fas fa-exclamation-triangle"></i> Network error: ${err}</td></tr>`;
             });
         }
 
@@ -2285,25 +2967,48 @@
             if (modalImg) modalImg.src = "";
         }
 
-        let streamErrRetry = null;
-        function handleStreamErr(img) {
-            if (!img) return;
-            if (streamErrRetry) clearTimeout(streamErrRetry);
-            streamErrRetry = setTimeout(() => {
-                if (img) img.src = "/video_feed?t=" + Date.now();
-            }, 1200);
-        }
-
         function copyRawJson() {
             const text = document.getElementById('raw-json-display').innerText;
             navigator.clipboard.writeText(text);
             alert("Raw JSON copied to clipboard!");
         }
 
-        // Global Keyboard Handler for Camera Navigation
+        // Global Keyboard Handler for Dual Device Navigation
         window.addEventListener('keydown', function(e) {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-            switch(e.key.toLowerCase()) {
+            const key = e.key.toLowerCase();
+
+            if (controlTarget === 'wt') {
+                switch(key) {
+                    case 'arrowup':
+                    case 'w':
+                        sendMainBtn(0, 1);
+                        break;
+                    case 'arrowdown':
+                    case 's':
+                        sendMainBtn(1, 1);
+                        break;
+                    case 'arrowleft':
+                    case 'a':
+                        sendMainBtn(2, 1);
+                        break;
+                    case 'arrowright':
+                    case 'd':
+                        sendMainBtn(3, 1);
+                        break;
+                    case 'enter':
+                    case ' ':
+                        sendMainBtn(4, 1);
+                        break;
+                    case 'escape':
+                    case 'b':
+                        sendMainBtn(5, 1);
+                        break;
+                }
+                return;
+            }
+
+            switch(key) {
                 case 'arrowup':
                 case 'w':
                     sendCamBtn(0, 1);
@@ -2337,7 +3042,39 @@
 
         window.addEventListener('keyup', function(e) {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-            switch(e.key.toLowerCase()) {
+            const key = e.key.toLowerCase();
+
+            if (controlTarget === 'wt') {
+                switch(key) {
+                    case 'arrowup':
+                    case 'w':
+                        sendMainBtn(0, 0);
+                        break;
+                    case 'arrowdown':
+                    case 's':
+                        sendMainBtn(1, 0);
+                        break;
+                    case 'arrowleft':
+                    case 'a':
+                        sendMainBtn(2, 0);
+                        break;
+                    case 'arrowright':
+                    case 'd':
+                        sendMainBtn(3, 0);
+                        break;
+                    case 'enter':
+                    case ' ':
+                        sendMainBtn(4, 0);
+                        break;
+                    case 'escape':
+                    case 'b':
+                        sendMainBtn(5, 0);
+                        break;
+                }
+                return;
+            }
+
+            switch(key) {
                 case 'arrowup':
                 case 'w':
                     sendCamBtn(0, 0);
@@ -2357,10 +3094,28 @@
             }
         });
 
-        // Auto-start stream on load
-        window.addEventListener('DOMContentLoaded', () => {
+        // Auto-start stream, hydrate telemetry immediately, and initialize modules
+        function bootDashboard() {
+            initWalkieModules();
+            // Immediate AJAX telemetry fetch so initial screen is never stuck on -- or 0
+            fetch('/api/telemetry')
+                .then(r => r.json())
+                .then(handleTelemetry)
+                .catch(e => console.log("Initial telemetry fetch:", e));
             ensureStreamListening();
-        });
+            // Periodic polling backup in case SSE drops
+            setInterval(() => {
+                if (!evtSource || evtSource.readyState !== 1) {
+                    fetch('/api/telemetry').then(r => r.json()).then(handleTelemetry).catch(()=>{});
+                }
+            }, 1500);
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', bootDashboard);
+        } else {
+            bootDashboard();
+        }
     </script>
 </body>
 </html>

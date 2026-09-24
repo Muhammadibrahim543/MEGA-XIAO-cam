@@ -29,6 +29,7 @@
 #include "audio.h"
 #include "live_radio.h"
 #include "wifi_stream.h"
+#include "power_manager.h"
 
 // ─── Display Rotation Configuration ──────────────────────────────
 // Default 0: 180-degree flip (inverted from original 2) so upside-down mounted display is right-side up.
@@ -165,6 +166,7 @@ static void pollBtn(Btn& b, uint8_t pin, bool remoteState, volatile bool& remote
     if (!raw && b.last && !b.longFired && (millis()-b.downAt)>=DEBOUNCE_MS)
         b.shortPress = true;
     if (!raw) b.repeatFired = false;
+    if (b.shortPress || b.repeatFired || (raw && !b.last)) power_manager_activity();
     b.last = raw;
 }
 
@@ -508,12 +510,18 @@ static void camTask(void* arg) {
 
 // ─── Screen helpers ───────────────────────────────────────────────
 static void switchScreen(Screen to) {
+    if (to == SCR_FILES) {
+        player_scan_files(fileList);
+        uiState.fileCursor = 0;
+        uiState.fileTop    = 0;
+    }
     uiState.screen    = to;
     uiState.editMode  = false;
     uiState.dirtyMenu = true;
     uiState.dirtyFeed = true;
     tft.fillRect(0, DIV_Y, DISP_W, DIV_H, C_DIVIDER);
 }
+
 
 // ─── Video recording ──────────────────────────────────────────────
 static void startRecording() {
@@ -608,18 +616,27 @@ static void renderLiveFrame() {
     spFeed.fillSprite(TFT_BLACK);
     display_ensure(0, 0);
     display_scale_to_sprite(spFeed, buf, fw, fh, LIVE_RGB565_SWAP_BYTES);
-    char fbuf[24];
-    snprintf(fbuf, sizeof(fbuf), "C%lu D%lu", captureFps, displayFps);
-    spFeed.setTextColor(C_WHITE, TFT_BLACK);
-    spFeed.setTextSize(1);
-    spFeed.drawString(fbuf, 4, 2);
 
+    // Sleek translucent top HUD bar (13px)
+    spFeed.fillRect(0, 0, DISP_W, 13, 0x10A2);
+
+    // FPS and CPU Frequency on top-left
+    char fbuf[32];
+    uint32_t activeFps = (displayFps > 0) ? displayFps : captureFps;
+    uint32_t cpuMhz = power_manager_get_cpu_freq();
+    snprintf(fbuf, sizeof(fbuf), "%lu FPS | %luM", (unsigned long)activeFps, (unsigned long)cpuMhz);
+    spFeed.setTextColor(C_WHITE, 0x10A2);
+    spFeed.setTextSize(1);
+    spFeed.drawString(fbuf, 4, 3);
+
+    // Temperature and Power Profile on top-right
     float coreT = temperatureRead();
-    char tbuf[12];
-    snprintf(tbuf, sizeof(tbuf), "%.0fC", coreT);
+    const PowerStats& pwr = power_manager_get_stats();
+    char tbuf[24];
+    snprintf(tbuf, sizeof(tbuf), "%.0fC %s", coreT, pwr.profileName);
     uint16_t tc = (coreT < 55.0f) ? C_ACCENT2 : (coreT < 70.0f) ? C_ORANGE : C_RED;
-    spFeed.setTextColor(tc, TFT_BLACK);
-    spFeed.drawString(tbuf, DISP_W - 28, 2);
+    spFeed.setTextColor(tc, 0x10A2);
+    spFeed.drawString(tbuf, DISP_W - 54, 3);
 
     if (uiState.recording) {
         bool blink = ((millis()/400)&1);
@@ -647,11 +664,14 @@ static void drawVfPanel() {
              FRAME_OPTIONS[camCfg.recFrameIdx].label);
     spMenu.print(buf);
     spMenu.setTextColor(C_ACCENT,C_BG); spMenu.setCursor(5,34);
-    snprintf(buf,sizeof(buf),"Q:%d  C%lu D%lu fps  %.0fC",
-             camCfg.quality, captureFps, displayFps, temperatureRead());
+    const PowerStats& pwr = power_manager_get_stats();
+    uint32_t activeFps = (displayFps > 0) ? displayFps : captureFps;
+    snprintf(buf,sizeof(buf),"%lu fps  %luMHz (%s)  %.0fC",
+             (unsigned long)activeFps, (unsigned long)pwr.currentFreqMhz, pwr.profileName, pwr.coreTempC);
     spMenu.print(buf);
     spMenu.pushSprite(0, MENU_Y);
 }
+
 
 // ─── Audio screen ─────────────────────────────────────────────────
 static void openAudioScreen() {
@@ -930,13 +950,16 @@ static void handleBackAction() {
 }
 
 static void handleFsLs(const char* path) {
+    if (!path || path[0] == '\0') path = "/";
     if (!uiState.sdReady) {
         Serial.println("{\"type\":\"FS_LS_RES\",\"error\":\"SD_NOT_READY\"}");
+        Serial.flush();
         return;
     }
     FsFile dir = SD.open(path);
     if (!dir || !dir.isDirectory()) {
         Serial.println("{\"type\":\"FS_LS_RES\",\"error\":\"DIR_NOT_FOUND\"}");
+        Serial.flush();
         return;
     }
     Serial.print("{\"type\":\"FS_LS_RES\",\"path\":\"");
@@ -963,7 +986,9 @@ static void handleFsLs(const char* path) {
     }
     dir.close();
     Serial.println("]}");
+    Serial.flush();
 }
+
 
 static void handleFsRead(const char* path, uint32_t offset, uint32_t size) {
     if (!uiState.sdReady) {
@@ -1204,6 +1229,33 @@ static void processSerialCommands() {
                             else if (strcmp(cmd, "FS_READ") == 0) {
                                 handleFsRead(doc["path"] | "", doc["offset"] | 0, doc["size"] | 512);
                             }
+                            else if (strcmp(cmd, "PWR_SET_PROFILE") == 0) {
+                                const char* prof = doc["profile"] | "AUTO";
+                                if (strcmp(prof, "PERF") == 0) power_manager_set_profile(PWR_PROFILE_PERF);
+                                else if (strcmp(prof, "BALANCED") == 0) power_manager_set_profile(PWR_PROFILE_BALANCED);
+                                else if (strcmp(prof, "ECO") == 0) power_manager_set_profile(PWR_PROFILE_ECO);
+                                else power_manager_set_profile(PWR_PROFILE_AUTO);
+                                power_manager_activity();
+                                Serial.printf("{\"type\":\"PWR_PROFILE_CHANGE\",\"profile\":\"%s\",\"cpuMhz\":%lu}\n",
+                                              power_manager_get_profile_name(power_manager_get_profile()),
+                                              (unsigned long)power_manager_get_cpu_freq());
+                            }
+                            else if (strcmp(cmd, "PWR_SLEEP") == 0) {
+                                const char* mode = doc["mode"] | "LIGHT";
+                                if (strcmp(mode, "DEEP") == 0) {
+                                    power_manager_enter_deep_sleep();
+                                } else {
+                                    power_manager_enter_light_sleep();
+                                    uiState.dirtyMenu = true;
+                                    uiState.dirtyFeed = true;
+                                }
+                            }
+                            else if (strcmp(cmd, "PWR_GET_INFO") == 0) {
+                                const PowerStats& pwr = power_manager_get_stats();
+                                Serial.printf("{\"type\":\"PWR_INFO\",\"profile\":\"%s\",\"cpuMhz\":%lu,\"coreTemp\":%.1f,\"throttled\":%s}\n",
+                                              pwr.profileName, (unsigned long)pwr.currentFreqMhz, pwr.coreTempC,
+                                              pwr.isThrottled ? "true" : "false");
+                            }
                         }
                     }
                 }
@@ -1220,8 +1272,10 @@ static void broadcastDeviceState() {
     static Screen lastReportedScreen = (Screen)-1;
     static bool lastReportedRec = false;
 
-    // In USB webcam mode during active streaming, minimize serial text overhead
-    if (uiState.screen == SCR_USB_WEBCAM && usbWebcamStreaming) return;
+    // In USB webcam mode during active streaming, throttle serial text broadcast to every 2000ms
+    if (uiState.screen == SCR_USB_WEBCAM && usbWebcamStreaming) {
+        if (millis() - lastBroadcast < 2000) return;
+    }
 
     uint32_t now = millis();
     bool stateChanged = (uiState.screen != lastReportedScreen || uiState.recording != lastReportedRec);
@@ -1231,15 +1285,21 @@ static void broadcastDeviceState() {
         lastReportedScreen = uiState.screen;
         lastReportedRec = uiState.recording;
 
-        Serial.printf("{\"type\":\"STATE\",\"screen\":%d,\"screenName\":\"%s\",\"recording\":%s,\"fps\":%u,\"heap\":%u,\"psram\":%u,\"rotation\":%d,\"coreTemp\":%.1f}\n",
+        const PowerStats& pwr = power_manager_get_stats();
+        uint32_t activeFps = (displayFps > 0) ? displayFps : captureFps;
+        Serial.printf("{\"type\":\"STATE\",\"screen\":%d,\"screenName\":\"%s\",\"recording\":%s,\"fps\":%u,\"heap\":%u,\"psram\":%u,\"rotation\":%d,\"coreTemp\":%.1f,\"cpuMhz\":%lu,\"pwrProfile\":\"%s\",\"throttled\":%s}\n",
             (int)uiState.screen,
             getScreenName(uiState.screen),
             uiState.recording ? "true" : "false",
-            displayFps,
+            activeFps,
             esp_get_free_heap_size(),
             heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
             currentRotation,
-            temperatureRead()
+            pwr.coreTempC,
+
+            (unsigned long)pwr.currentFreqMhz,
+            pwr.profileName,
+            pwr.isThrottled ? "true" : "false"
         );
     }
 }
@@ -1434,6 +1494,7 @@ void setup() {
     tft.setRotation(currentRotation);
     tft.fillScreen(TFT_BLACK);
     tft.setSwapBytes(true);
+    power_manager_init(&tft);
 
     ui_eeprom_load(camCfg);
 
@@ -1547,6 +1608,8 @@ void loop() {
     }
 
     handleInput();
+    bool isHighLoad = (uiState.screen == SCR_QR_READER && qrScanning) || (uiState.screen == SCR_ESPNOW && uiState.streamConnected);
+    power_manager_tick(uiState.recording, usbWebcamStreaming, isHighLoad);
 
     // ── VIEWFINDER ────────────────────────────────────────────────
     if (uiState.screen == SCR_VIEWFINDER || uiState.screen == SCR_SETTINGS) {
@@ -1739,18 +1802,11 @@ void loop() {
     // ── USB WEBCAM ───────────────────────────────────────────────
     else if (uiState.screen == SCR_USB_WEBCAM) {
         static uint32_t wcUiT = 0;
-        if (millis() - wcUiT > 250 || uiState.dirtyMenu || uiState.dirtyFeed) {
+        if (millis() - wcUiT >= 250 || uiState.dirtyMenu || uiState.dirtyFeed) {
             wcUiT = millis();
-            if (uiState.dirtyFeed) {
-                spFeed.fillSprite(C_BG);
-                spFeed.setTextColor(0x07FF,C_BG);
-                spFeed.setTextSize(2);
-                spFeed.drawString("USB WEBCAM", DISP_W/2-44, FEED_H/2-10);
-                spFeed.pushSprite(0, FEED_Y);
-                uiState.dirtyFeed = false;
-            }
-            ui_draw_usb_webcam(spMenu, uiState, usbWebcamStreaming);
+            ui_draw_usb_webcam(spMenu, spFeed, uiState, usbWebcamStreaming, captureFps, camCfg, usbWebcamAudioStreaming);
             uiState.dirtyMenu = false;
+            uiState.dirtyFeed = false;
         }
     } else if (uiState.screen == SCR_WIFI_STREAM) {
         wifiStreamTick();

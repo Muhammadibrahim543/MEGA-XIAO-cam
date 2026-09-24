@@ -134,7 +134,8 @@ void  ui_draw_espnow_screen(TFT_eSprite& sp, const UIState& ui,
                             uint8_t streamState, uint32_t fps, uint32_t framesSent,
                             uint32_t bytesSent, const uint8_t* receiverMAC,
                             uint32_t avgFrameKB, uint32_t droppedFrames);
-void  ui_draw_usb_webcam(TFT_eSprite& sp, const UIState& ui, bool isStreaming);
+void  ui_draw_usb_webcam(TFT_eSprite& spMenu, TFT_eSprite& spFeed, const UIState& ui,
+                        bool isStreaming, uint32_t fps, const CamSettings& cs, bool audioActive);
 // Audio screen static panel (header only; audio.cpp draws live data itself)
 void  ui_draw_audio_idle(TFT_eSprite& sp);
 
