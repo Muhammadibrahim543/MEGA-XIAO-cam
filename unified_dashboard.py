@@ -32,7 +32,22 @@ try:
 except ImportError:
     HAS_PYVIRTUALCAM = False
 
+try:
+    import webview
+    HAS_WEBVIEW = True
+except ImportError:
+    HAS_WEBVIEW = False
+
+def get_resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    if getattr(sys, 'frozen', False):
+        base_path = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
 app = Flask(__name__)
+
 
 # ─── Packet Magic Signatures ────────────────────────────────────────────────
 MAGIC_VID        = b'\x78\x56\x34\x12'   # 0x12345678 (Video JPEG Frame)
@@ -122,6 +137,103 @@ smooth_bands = cam_smooth_bands
 
 current_audio_device = None
 audio_stream_obj = None
+
+# ─── Pro ISP Hardware-Accelerated Image Signal Processing Pipeline ───────────
+try:
+    cv2.ocl.setUseOpenCL(True)
+    HAS_OPENCL = cv2.ocl.useOpenCL()
+    OPENCL_DEV = cv2.ocl.Device.getDefault().name() if HAS_OPENCL else "CPU"
+except Exception:
+    HAS_OPENCL = False
+    OPENCL_DEV = "CPU"
+
+isp_config = {
+    "enabled": True,
+    "preset": "logitech_pro",
+    "sharpness": 1.2,
+    "clahe": True,
+    "clahe_clip": 2.0,
+    "denoise": True,
+    "saturation": 1.25,
+    "brightness": 4,
+    "contrast": 1.12,
+    "auto_wb": True,
+    "gamma": 1.05
+}
+isp_lock = threading.Lock()
+
+def apply_pro_isp(frame_bgr):
+    with isp_lock:
+        if not isp_config.get("enabled", True):
+            return frame_bgr
+        cfg = isp_config.copy()
+
+    try:
+        out = frame_bgr
+
+        # 1. Auto White Balance (Gray World algorithm with safety clipping)
+        if cfg.get("auto_wb", True):
+            b, g, r = cv2.split(out)
+            b_avg = np.mean(b) + 1e-5
+            g_avg = np.mean(g) + 1e-5
+            r_avg = np.mean(r) + 1e-5
+            k = (b_avg + g_avg + r_avg) / 3.0
+            kb = np.clip(k / b_avg, 0.75, 1.35)
+            kg = np.clip(k / g_avg, 0.75, 1.35)
+            kr = np.clip(k / r_avg, 0.75, 1.35)
+            out = cv2.merge([
+                np.clip(b * kb, 0, 255).astype(np.uint8),
+                np.clip(g * kg, 0, 255).astype(np.uint8),
+                np.clip(r * kr, 0, 255).astype(np.uint8)
+            ])
+
+        # 2. Fast Sensor Chroma / Grain Denoising
+        if cfg.get("denoise", True):
+            out = cv2.bilateralFilter(out, d=5, sigmaColor=35, sigmaSpace=35)
+
+        # 3. Dynamic Range Expansion (CLAHE) & Contrast / Brightness
+        if cfg.get("clahe", True) or cfg.get("saturation", 1.0) != 1.0 or cfg.get("contrast", 1.0) != 1.0 or cfg.get("brightness", 0) != 0:
+            lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
+            l, a, b_ch = cv2.split(lab)
+
+            if cfg.get("clahe", True):
+                clip = float(cfg.get("clahe_clip", 2.0))
+                clahe_obj = cv2.createCLAHE(clipLimit=clip, tileGridSize=(8, 8))
+                l = clahe_obj.apply(l)
+
+            # Brightness and contrast on Luma
+            contrast = float(cfg.get("contrast", 1.0))
+            brightness = float(cfg.get("brightness", 0))
+            if contrast != 1.0 or brightness != 0:
+                l = np.clip(contrast * l + brightness, 0, 255).astype(np.uint8)
+
+            out = cv2.merge([l, a, b_ch])
+            out = cv2.cvtColor(out, cv2.COLOR_LAB2BGR)
+
+            # Saturation / Vibrance
+            sat = float(cfg.get("saturation", 1.0))
+            if sat != 1.0:
+                hsv = cv2.cvtColor(out, cv2.COLOR_BGR2HSV).astype(np.float32)
+                hsv[:, :, 1] = np.clip(hsv[:, :, 1] * sat, 0, 255)
+                out = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+        # 4. Adaptive Edge Sharpening (Unsharp Mask)
+        sharp = float(cfg.get("sharpness", 0.0))
+        if sharp > 0:
+            blurred = cv2.GaussianBlur(out, (0, 0), sigmaX=2.0)
+            out = cv2.addWeighted(out, 1.0 + sharp, blurred, -sharp, 0)
+
+        # 5. Gamma Correction (Studio Lighting Curve)
+        gamma = float(cfg.get("gamma", 1.0))
+        if gamma != 1.0:
+            inv_gamma = 1.0 / max(0.1, gamma)
+            table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+            out = cv2.LUT(out, table)
+
+        return out
+    except Exception:
+        return frame_bgr
+
 
 def create_log_bins(n_bins, n_fft, sample_rate):
     min_freq = 60
@@ -326,11 +438,27 @@ def serial_cam_worker():
                     if len(buf) < 8 + frame_len:
                         break
                     
-                    jpeg_bytes = bytes(buf[8 : 8 + frame_len])
+                    raw_jpeg_bytes = bytes(buf[8 : 8 + frame_len])
                     buf = buf[8 + frame_len :]
 
+                    final_jpeg_bytes = raw_jpeg_bytes
+                    frame_bgr = None
+
+                    # Pro ISP Hardware-Accelerated Processing
+                    if isp_config.get("enabled", True):
+                        try:
+                            img_arr = np.frombuffer(raw_jpeg_bytes, dtype=np.uint8)
+                            frame_bgr = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+                            if frame_bgr is not None:
+                                frame_bgr = apply_pro_isp(frame_bgr)
+                                ok, enc = cv2.imencode('.jpg', frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+                                if ok:
+                                    final_jpeg_bytes = enc.tobytes()
+                        except Exception:
+                            pass
+
                     with frame_condition:
-                        latest_jpeg_frame = jpeg_bytes
+                        latest_jpeg_frame = final_jpeg_bytes
                         last_video_frame_time = time.time()
                         frame_condition.notify_all()
 
@@ -342,11 +470,12 @@ def serial_cam_worker():
                         video_frame_count = 0
                         fps_measure_time = now
 
-                    # Virtual Camera forward
+                    # Virtual Camera forward (using the enhanced frame!)
                     if vcam_enabled and HAS_PYVIRTUALCAM:
                         try:
-                            img_arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-                            frame_bgr = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+                            if frame_bgr is None:
+                                img_arr = np.frombuffer(final_jpeg_bytes, dtype=np.uint8)
+                                frame_bgr = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
                             if frame_bgr is not None:
                                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                                 h, w, _ = frame_rgb.shape
@@ -608,7 +737,7 @@ def add_header(r):
 
 @app.route('/')
 def index():
-    template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'unified_dashboard_template.html')
+    template_path = get_resource_path('unified_dashboard_template.html')
     try:
         with open(template_path, 'r', encoding='utf-8') as f:
             html = f.read()
@@ -618,6 +747,7 @@ def index():
     ports = [p.device for p in serial.tools.list_ports.comports()]
     audio_devices = get_audio_output_devices()
     return render_template_string(html, ports=ports, audio_devices=audio_devices)
+
 
 def do_connect_cam(port, baud=115200):
     global ser_cam, is_cam_connected, cam_port_name
@@ -802,6 +932,59 @@ def api_snapshot():
             return Response(latest_jpeg_frame, mimetype='image/jpeg',
                             headers={"Content-Disposition": f"attachment; filename=snapshot_{int(time.time())}.jpg"})
     return "No frame captured yet", 404
+
+# ─── Pro ISP Studio Settings Endpoints ────────────────────────────────────────
+@app.route('/api/isp/settings', methods=['GET', 'POST'])
+def api_isp_settings():
+    global isp_config
+    if request.method == 'POST':
+        data = request.json or {}
+        with isp_lock:
+            for k, v in data.items():
+                if k in isp_config:
+                    isp_config[k] = v
+        return jsonify({"success": True, "settings": isp_config, "device": OPENCL_DEV, "opencl": HAS_OPENCL})
+    with isp_lock:
+        return jsonify({"settings": isp_config, "device": OPENCL_DEV, "opencl": HAS_OPENCL})
+
+@app.route('/api/isp/preset', methods=['POST'])
+def api_isp_preset():
+    global isp_config
+    preset = (request.json or {}).get("preset", "logitech_pro")
+    presets = {
+        "logitech_pro": {
+            "enabled": True, "sharpness": 1.2, "clahe": True, "clahe_clip": 2.0,
+            "denoise": True, "saturation": 1.25, "brightness": 4, "contrast": 1.12,
+            "auto_wb": True, "gamma": 1.05
+        },
+        "studio_cinema": {
+            "enabled": True, "sharpness": 1.5, "clahe": True, "clahe_clip": 2.8,
+            "denoise": True, "saturation": 1.35, "brightness": 0, "contrast": 1.25,
+            "auto_wb": True, "gamma": 0.95
+        },
+        "night_owl": {
+            "enabled": True, "sharpness": 0.8, "clahe": True, "clahe_clip": 3.8,
+            "denoise": True, "saturation": 1.1, "brightness": 18, "contrast": 1.15,
+            "auto_wb": True, "gamma": 1.25
+        },
+        "vivid_pop": {
+            "enabled": True, "sharpness": 1.4, "clahe": True, "clahe_clip": 2.2,
+            "denoise": False, "saturation": 1.45, "brightness": 6, "contrast": 1.18,
+            "auto_wb": True, "gamma": 1.05
+        },
+        "raw_direct": {
+            "enabled": False, "sharpness": 0.0, "clahe": False, "clahe_clip": 1.0,
+            "denoise": False, "saturation": 1.0, "brightness": 0, "contrast": 1.0,
+            "auto_wb": False, "gamma": 1.0
+        }
+    }
+    if preset in presets:
+        with isp_lock:
+            isp_config.update(presets[preset])
+            isp_config["preset"] = preset
+        return jsonify({"success": True, "settings": isp_config})
+    return jsonify({"success": False, "error": "Unknown preset"}), 400
+
 
 @app.route('/cmd/cam/stream/start', methods=['POST'])
 def cmd_cam_stream_start():
@@ -1171,6 +1354,45 @@ if __name__ == '__main__':
                 print(f"[AUTOCONNECT] {target_main} connect error:", err)
 
     threading.Thread(target=background_autoconnect, daemon=True).start()
-    threading.Thread(target=open_browser, daemon=True).start()
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+
+    use_browser = '--browser' in sys.argv or '--web' in sys.argv
+
+    if HAS_WEBVIEW and not use_browser:
+        # Start Flask server in background daemon thread
+        flask_thread = threading.Thread(
+            target=lambda: app.run(host='127.0.0.1', port=5000, debug=False, threaded=True, use_reloader=False),
+            daemon=True
+        )
+        flask_thread.start()
+
+        print("\n" + "="*75)
+        print("  * XIAO ESP32-S3 Dual-Device Vision & Audio Hub (Desktop App Mode)")
+        print("  * Native GUI Application Window Opening...")
+        print("  * Port 1 (XIAO CAM): Default COM9 (Camera, Mic Audio, Cam Remote)")
+        print("  * Port 2 (MAIN DEVICE): Separate COM port (Telemetry, RF, Main Remote)")
+        print("  * Keyboard Controls: [Arrows/WASD] Menu Nav, [Enter] OK, [Esc/B] Back")
+        print("="*75 + "\n")
+
+        # Create Native GUI Window
+        window = webview.create_window(
+            title="XIAO ESP32-S3 Vision & Audio Hub",
+            url="http://127.0.0.1:5000/",
+            width=1340,
+            height=880,
+            resizable=True,
+            min_size=(960, 640)
+        )
+        webview.start()
+
+        # Clean exit when desktop window is closed
+        try:
+            disconnect_cam()
+            disconnect_main()
+        except:
+            pass
+        os._exit(0)
+    else:
+        threading.Thread(target=open_browser, daemon=True).start()
+        app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+
 

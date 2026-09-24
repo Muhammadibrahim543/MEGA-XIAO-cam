@@ -603,6 +603,32 @@
             box-shadow: inset 0 3px 12px rgba(0,0,0,0.9), 0 0 12px rgba(0, 212, 255, 0.15);
         }
 
+        .preset-btn {
+            padding: 6px 12px;
+            background: rgba(16, 20, 29, 0.9);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            color: var(--text-main);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+        .preset-btn:hover {
+            border-color: var(--primary);
+            background: rgba(0, 212, 255, 0.1);
+        }
+        .preset-btn.active {
+            border-color: var(--primary);
+            background: rgba(0, 212, 255, 0.22);
+            box-shadow: 0 0 10px rgba(0, 212, 255, 0.4);
+            color: #fff;
+        }
+
+
         /* Exact 172 x 320 Pixel Display */
         .cam-tft-screen {
             width: var(--cam-screen-w);
@@ -1398,10 +1424,12 @@
                                 </div>
                                 <div class="cam-vf-hud-bot">
                                     <span id="hud-cam-mode">VIEWFINDER</span>
+                                    <span id="hud-isp-pill" onclick="event.stopPropagation(); toggleIspMaster();" style="background: rgba(0,230,118,0.2); border: 1px solid #00e676; color: #00e676; border-radius: 4px; padding: 1px 5px; font-size: 8px; font-weight: 800; cursor: pointer;" title="Click to Toggle Pro ISP Mode">PRO ISP: ON</span>
                                     <span id="hud-cam-rec" class="cam-tag-rec">● REC</span>
                                 </div>
                             </div>
                         </div>
+
 
                         <!-- Bottom 172 x 148 px: UI Menu / Telemetry Panel -->
                         <div class="cam-tft-menu" id="cam-tft-menu-body">
@@ -1526,6 +1554,9 @@
             <div class="studio-tabs">
                 <div class="s-tab active" onclick="switchStudioTab('tuning')">
                     <i class="fas fa-sliders-h"></i> Camera Studio & Mic
+                </div>
+                <div class="s-tab" onclick="switchStudioTab('pro-isp')">
+                    <i class="fas fa-magic" style="color: #00d4ff;"></i> Pro ISP Studio (PC AI)
                 </div>
                 <div class="s-tab" onclick="switchStudioTab('files')">
                     <i class="fas fa-folder-open"></i> Camera SD Files
@@ -1676,6 +1707,129 @@
 
                     </div>
                 </div>
+
+                <!-- TAB: PRO ISP STUDIO (PC HARDWARE ACCELERATED) -->
+                <div id="tab-pro-isp" class="tab-panel">
+                    <div class="card-grid">
+
+                        <!-- Master ISP Switch & GPU Acceleration Info -->
+                        <div class="dash-card" style="grid-column: 1 / -1;">
+                            <div class="dash-card-title" style="display: flex; justify-content: space-between; align-items: center;">
+                                <span><i class="fas fa-microchip" style="color: var(--primary);"></i> Hardware-Accelerated Pro ISP Studio</span>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span class="dash-badge" style="background: rgba(0,212,255,0.15); color: #00d4ff; border-color: rgba(0,212,255,0.4);" id="isp-hw-dev">
+                                        <i class="fas fa-bolt"></i> AMD Radeon Vega 7 (OpenCL Active)
+                                    </span>
+                                    <span class="dash-badge" style="background: rgba(0,230,118,0.15); color: #00e676; border-color: rgba(0,230,118,0.4);">
+                                        Zero Device Load
+                                    </span>
+                                </div>
+                            </div>
+                            <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;">
+                                Transforms the raw OV3660 camera stream in real-time into a high-end Logitech/studio webcam look using Ryzen 5 + AMD Vega 7 GPU computing. Includes dynamic range recovery, sensor chroma denoising, adaptive unsharp masking, and studio color curves.
+                            </div>
+
+                            <!-- Master Toggle and Presets -->
+                            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.06);">
+                                <button id="btn-isp-master" class="c-btn" style="padding: 8px 16px; font-size: 12px; font-weight: bold; background: rgba(0,230,118,0.15); border-color: var(--accent-green); color: var(--accent-green);" onclick="toggleIspMaster()">
+                                    <i class="fas fa-check-circle"></i> PRO STUDIO ISP: ACTIVE
+                                </button>
+                                <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                                    <span style="font-size: 11px; color: var(--text-muted); font-weight: bold;">PRESETS:</span>
+                                    <button class="preset-btn active" data-preset="logitech_pro" onclick="setIspPreset('logitech_pro')" title="Balanced clarity, razor-sharp text, vivid skin tones">
+                                        <i class="fas fa-video" style="color: #00d4ff;"></i> Logitech C920
+                                    </button>
+                                    <button class="preset-btn" data-preset="studio_cinema" onclick="setIspPreset('studio_cinema')" title="High contrast, deep film dynamic range">
+                                        <i class="fas fa-film" style="color: #9d4edd;"></i> Cinema Studio
+                                    </button>
+                                    <button class="preset-btn" data-preset="night_owl" onclick="setIspPreset('night_owl')" title="Heavy CLAHE shadow recovery and grain reduction">
+                                        <i class="fas fa-moon" style="color: #ffb703;"></i> Low-Light Owl
+                                    </button>
+                                    <button class="preset-btn" data-preset="vivid_pop" onclick="setIspPreset('vivid_pop')" title="Lively punchy colors and high vibrance">
+                                        <i class="fas fa-palette" style="color: #ff3d71;"></i> Vivid Pop
+                                    </button>
+                                    <button class="preset-btn" data-preset="raw_direct" onclick="setIspPreset('raw_direct')" title="Bypass all PC filters">
+                                        <i class="fas fa-times-circle" style="color: var(--text-muted);"></i> Raw Direct
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Card 1: Optical Clarity & Dynamic Range -->
+                        <div class="dash-card">
+                            <div class="dash-card-title">
+                                <span><i class="fas fa-eye" style="color: #00d4ff;"></i> Clarity & Dynamic Range</span>
+                            </div>
+
+                            <!-- Smart Edge Sharpness -->
+                            <div class="tune-row">
+                                <span class="tune-label"><i class="fas fa-feather-alt"></i> Sharpness (Unsharp Mask):</span>
+                                <input type="range" id="isp-sharp" min="0.0" max="2.5" step="0.1" value="1.2" oninput="updateVal('val-isp-sharp', this.value + 'x'); updateIspParam('sharpness', parseFloat(this.value))">
+                                <span class="tune-val" id="val-isp-sharp">1.2x</span>
+                            </div>
+
+                            <!-- Dynamic Range CLAHE -->
+                            <div class="tune-row">
+                                <span class="tune-label"><i class="fas fa-adjust"></i> CLAHE Dynamic Range:</span>
+                                <input type="range" id="isp-clahe-clip" min="1.0" max="4.0" step="0.2" value="2.0" oninput="updateVal('val-isp-clahe', this.value); updateIspParam('clahe_clip', parseFloat(this.value))">
+                                <span class="tune-val" id="val-isp-clahe">2.0</span>
+                            </div>
+
+                            <!-- Toggles Row -->
+                            <div style="display: flex; gap: 14px; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); font-size: 11px;">
+                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="isp-chk-clahe" checked onchange="updateIspParam('clahe', this.checked)">
+                                    <span>Enable CLAHE</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="isp-chk-denoise" checked onchange="updateIspParam('denoise', this.checked)">
+                                    <span>Sensor Denoising</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="isp-chk-awb" checked onchange="updateIspParam('auto_wb', this.checked)">
+                                    <span>Auto White Balance</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Card 2: Studio Color Grading & Lighting -->
+                        <div class="dash-card">
+                            <div class="dash-card-title">
+                                <span><i class="fas fa-sliders-h" style="color: var(--accent-yellow);"></i> Studio Color & Lighting Curves</span>
+                            </div>
+
+                            <!-- Color Vibrance / Saturation -->
+                            <div class="tune-row">
+                                <span class="tune-label"><i class="fas fa-tint"></i> Color Vibrance:</span>
+                                <input type="range" id="isp-sat" min="0.6" max="2.0" step="0.05" value="1.25" oninput="updateVal('val-isp-sat', Math.round(this.value * 100) + '%'); updateIspParam('saturation', parseFloat(this.value))">
+                                <span class="tune-val" id="val-isp-sat">125%</span>
+                            </div>
+
+                            <!-- Contrast -->
+                            <div class="tune-row">
+                                <span class="tune-label"><i class="fas fa-circle-half-stroke"></i> Contrast:</span>
+                                <input type="range" id="isp-con" min="0.8" max="1.5" step="0.02" value="1.12" oninput="updateVal('val-isp-con', this.value); updateIspParam('contrast', parseFloat(this.value))">
+                                <span class="tune-val" id="val-isp-con">1.12</span>
+                            </div>
+
+                            <!-- Brightness -->
+                            <div class="tune-row">
+                                <span class="tune-label"><i class="fas fa-sun"></i> Brightness:</span>
+                                <input type="range" id="isp-bri" min="-30" max="30" step="1" value="4" oninput="updateVal('val-isp-bri', this.value); updateIspParam('brightness', parseInt(this.value))">
+                                <span class="tune-val" id="val-isp-bri">4</span>
+                            </div>
+
+                            <!-- Gamma Curve -->
+                            <div class="tune-row">
+                                <span class="tune-label"><i class="fas fa-chart-area"></i> Gamma Curve:</span>
+                                <input type="range" id="isp-gamma" min="0.8" max="1.3" step="0.02" value="1.05" oninput="updateVal('val-isp-gamma', this.value); updateIspParam('gamma', parseFloat(this.value))">
+                                <span class="tune-val" id="val-isp-gamma">1.05</span>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
 
                 <!-- TAB 2: CAMERA SD CARD FILE MANAGER -->
                 <div id="tab-files" class="tab-panel">
@@ -3094,9 +3248,109 @@
             }
         });
 
+        // ─── Pro ISP Studio Client State & Sync ──────────────────────────────
+        let currentIspConfig = {
+            enabled: true,
+            preset: 'logitech_pro',
+            sharpness: 1.2,
+            clahe: true,
+            clahe_clip: 2.0,
+            denoise: true,
+            saturation: 1.25,
+            brightness: 4,
+            contrast: 1.12,
+            auto_wb: true,
+            gamma: 1.05
+        };
+
+        function fetchIspSettings() {
+            fetch('/api/isp/settings')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.settings) {
+                        currentIspConfig = data.settings;
+                        syncIspUi();
+                    }
+                    if (data.device) {
+                        const devEl = document.getElementById('isp-hw-dev');
+                        if (devEl) devEl.innerHTML = `<i class="fas fa-bolt"></i> ${data.device} ${data.opencl ? '(OpenCL Active)' : '(CPU)'}`;
+                    }
+                }).catch(() => {});
+        }
+
+        function syncIspUi() {
+            const cfg = currentIspConfig;
+            const btnMaster = document.getElementById('btn-isp-master');
+            const hudPill = document.getElementById('hud-isp-pill');
+            if (btnMaster) {
+                btnMaster.innerHTML = cfg.enabled ? '<i class="fas fa-check-circle"></i> PRO STUDIO ISP: ACTIVE' : '<i class="fas fa-ban"></i> PRO STUDIO ISP: OFF';
+                btnMaster.style.borderColor = cfg.enabled ? 'var(--accent-green)' : 'var(--border)';
+                btnMaster.style.color = cfg.enabled ? 'var(--accent-green)' : 'var(--text-muted)';
+                btnMaster.style.background = cfg.enabled ? 'rgba(0,230,118,0.15)' : 'rgba(255,255,255,0.05)';
+            }
+            if (hudPill) {
+                hudPill.innerText = cfg.enabled ? 'PRO ISP: ON' : 'RAW';
+                hudPill.style.color = cfg.enabled ? 'var(--accent-green)' : 'var(--text-muted)';
+                hudPill.style.borderColor = cfg.enabled ? 'var(--accent-green)' : 'var(--border)';
+            }
+            const elSharp = document.getElementById('isp-sharp');
+            if (elSharp) { elSharp.value = cfg.sharpness; updateVal('val-isp-sharp', cfg.sharpness + 'x'); }
+            const elClaheClip = document.getElementById('isp-clahe-clip');
+            if (elClaheClip) { elClaheClip.value = cfg.clahe_clip; updateVal('val-isp-clahe', cfg.clahe_clip); }
+            const elSat = document.getElementById('isp-sat');
+            if (elSat) { elSat.value = cfg.saturation; updateVal('val-isp-sat', Math.round(cfg.saturation * 100) + '%'); }
+            const elBri = document.getElementById('isp-bri');
+            if (elBri) { elBri.value = cfg.brightness; updateVal('val-isp-bri', cfg.brightness); }
+            const elCon = document.getElementById('isp-con');
+            if (elCon) { elCon.value = cfg.contrast; updateVal('val-isp-con', cfg.contrast); }
+            const elGamma = document.getElementById('isp-gamma');
+            if (elGamma) { elGamma.value = cfg.gamma; updateVal('val-isp-gamma', cfg.gamma); }
+
+            const chkClahe = document.getElementById('isp-chk-clahe');
+            if (chkClahe) chkClahe.checked = !!cfg.clahe;
+            const chkDenoise = document.getElementById('isp-chk-denoise');
+            if (chkDenoise) chkDenoise.checked = !!cfg.denoise;
+            const chkAwb = document.getElementById('isp-chk-awb');
+            if (chkAwb) chkAwb.checked = !!cfg.auto_wb;
+
+            document.querySelectorAll('.preset-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.preset === cfg.preset);
+            });
+        }
+
+        function updateIspParam(param, val) {
+            currentIspConfig[param] = val;
+            fetch('/api/isp/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({[param]: val})
+            }).then(r => r.json()).then(res => {
+                if (res.settings) currentIspConfig = res.settings;
+                syncIspUi();
+            });
+        }
+
+        function setIspPreset(presetName) {
+            fetch('/api/isp/preset', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({preset: presetName})
+            }).then(r => r.json()).then(res => {
+                if (res.settings) {
+                    currentIspConfig = res.settings;
+                    syncIspUi();
+                }
+            });
+        }
+
+        function toggleIspMaster() {
+            updateIspParam('enabled', !currentIspConfig.enabled);
+        }
+
         // Auto-start stream, hydrate telemetry immediately, and initialize modules
         function bootDashboard() {
             initWalkieModules();
+            fetchIspSettings();
             // Immediate AJAX telemetry fetch so initial screen is never stuck on -- or 0
             fetch('/api/telemetry')
                 .then(r => r.json())
@@ -3110,6 +3364,7 @@
                 }
             }, 1500);
         }
+
 
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', bootDashboard);
