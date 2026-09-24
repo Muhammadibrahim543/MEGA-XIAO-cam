@@ -84,9 +84,9 @@ struct CamSettings {
 
 inline CamSettings cam_defaults() {
     CamSettings s;
-    s.frameIdx   = 5;    // QVGA — best fps/quality balance
+    s.frameIdx   = 5;    // QVGA — best fps/quality balance for local LCD
     s.recFrameIdx= 5;    // recording resolution
-    s.wcFrameIdx = 5;    // webcam resolution
+    s.wcFrameIdx = 9;    // webcam resolution: SVGA (800x600) for crystal clear HD PC view
     s.quality    = 10;   // lower = better JPEG quality
     s.brightness = 1;
     s.contrast   = 1;

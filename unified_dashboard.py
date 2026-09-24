@@ -827,10 +827,12 @@ def do_connect_cam(port, baud=115200):
                         try:
                             ser_cam.write(b'{"cmd":"PING"}\n')
                             ser_cam.write(b'{"cmd":"PWR_GET_INFO"}\n')
+                            ser_cam.write(b"SET:RES:9\n")  # SVGA (800x600) True High-Def Capture
+                            ser_cam.write(b"SET:Q:10\n")   # High quality JPEG
                             ser_cam.write(b"SET:CAM:1\nSET:MIC:1\n")
                             ser_cam.write(b'{"cmd":"START_STREAM"}\n')
                             ser_cam.flush()
-                            print(f"[XIAO CAM] Initialized on {port} (USB Webcam stream active)")
+                            print(f"[XIAO CAM] Initialized on {port} (USB Webcam stream active @ SVGA 800x600)")
                         except Exception as e:
                             print(f"[XIAO CAM] Activation error: {e}")
 
@@ -1043,6 +1045,8 @@ def cmd_cam_stream_start():
                 ser_cam.write(b"SET:CAM:0\n")
                 ser_cam.flush()
                 time.sleep(0.04)
+                ser_cam.write(b"SET:RES:9\n")
+                ser_cam.write(b"SET:Q:10\n")
                 ser_cam.write(b"SET:CAM:1\nSET:MIC:1\n")
                 ser_cam.write(b'{"cmd":"START_STREAM"}\n')
                 ser_cam.flush()
