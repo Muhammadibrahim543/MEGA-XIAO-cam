@@ -20,7 +20,7 @@ extern SdFs SD;
 #define SD_MOSI   9
 #define SD_MISO   8
 #define SD_SCK    7
-#define SD_SPI_FREQ 25000000
+#define SD_SPI_FREQ 40000000
 
 extern SPIClass spiSD;
 

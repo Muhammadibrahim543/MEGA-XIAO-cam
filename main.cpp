@@ -1490,6 +1490,21 @@ void setup() {
     pinMode(BTN_OK, INPUT_PULLUP);
     pinMode(BTN_DN, INPUT_PULLUP);
 
+    // ── SPI Bus Isolation (Ensure SD Card is unselected before TFT init) ──
+    pinMode(SD_CS, OUTPUT);
+    digitalWrite(SD_CS, HIGH);
+
+    pinMode(TFT_CS, OUTPUT);
+    digitalWrite(TFT_CS, HIGH);
+
+    pinMode(TFT_RST, OUTPUT);
+    digitalWrite(TFT_RST, HIGH);
+    delay(10);
+    digitalWrite(TFT_RST, LOW);
+    delay(50);
+    digitalWrite(TFT_RST, HIGH);
+    delay(120);
+
     tft.init();
     tft.setRotation(currentRotation);
     tft.fillScreen(TFT_BLACK);
@@ -1561,6 +1576,29 @@ void setup() {
 
     // ── SD init ────────────────────────────────────────────────────
     uiState.sdReady = recorder_sd_init();
+
+    // ── TFT Re-init after SD init ──────────────────────────────────
+    // recorder_sd_init() calls spiSD.begin(SCK=7,MISO=8,MOSI=9) which
+    // reconfigures the HSPI peripheral and corrupts TFT_eSPI's SPI state.
+    // We must reinitialize the TFT AFTER SD is ready to restore the display.
+    digitalWrite(TFT_CS, HIGH);  // deselect TFT first
+    delay(5);
+    // Hardware reset pulse to bring ST7789 back to known state
+    digitalWrite(TFT_RST, LOW);
+    delay(20);
+    digitalWrite(TFT_RST, HIGH);
+    delay(120);
+    tft.init();
+    tft.setRotation(currentRotation);
+    tft.fillScreen(TFT_BLACK);
+    tft.setSwapBytes(true);
+    // Redraw the "Starting..." message that was erased
+    spFeed.fillSprite(TFT_BLACK);
+    spFeed.setTextColor(C_ACCENT, TFT_BLACK);
+    spFeed.drawString("Starting...", 10, FEED_H/2);
+    spFeed.pushSprite(0, FEED_Y);
+    tft.fillRect(0, DIV_Y, DISP_W, DIV_H, C_DIVIDER);
+    Serial.println("[MAIN] TFT re-init after SD done");
 
     // ── Camera task on Core 1 — MUST be created BEFORE mic init ───
     // CRITICAL: Task stack allocated from DRAM first to prevent DMA

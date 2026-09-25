@@ -26,6 +26,7 @@ bool player_spk_init() {
 }
 
 static bool spk_init_with_rate(uint32_t rate) {
+    if (SPK_BCLK < 0 || SPK_DOUT < 0 || SPK_LRC < 0) return false;
     if (s_spkReady && s_spkRate == rate) return true;
     if (s_spkReady) {
         i2sSpk.end();

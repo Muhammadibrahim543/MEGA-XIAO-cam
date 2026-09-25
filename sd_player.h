@@ -11,9 +11,9 @@ extern SdFs SD;
 #include "camera_config.h"
 
 // ─── Speaker Pins (MAX98357A) ────────────────────────────────────
-#define SPK_BCLK        7
-#define SPK_DOUT        8
-#define SPK_LRC         9
+#define SPK_BCLK        -1   // Disabled (NULL)
+#define SPK_DOUT        -1   // Disabled (NULL)
+#define SPK_LRC         -1   // Disabled (NULL)
 #define SPK_SAMPLE_RATE 16000
 
 // ─── File list ────────────────────────────────────────────────────
