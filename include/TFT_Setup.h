@@ -2,8 +2,8 @@
 #define ST7789_DRIVER
 
 // ── Resolution ──────────────────────────────
-#define TFT_WIDTH   172
-#define TFT_HEIGHT  320
+#define TFT_WIDTH   240
+#define TFT_HEIGHT  240
 
 // ── SPI Port (ESP32-S3 এর জন্য MANDATORY) ──
 #define USE_HSPI_PORT       //  crash 
@@ -11,7 +11,7 @@
 // ── Pins ────────────────────────────────────
 #define TFT_MOSI   4
 #define TFT_SCLK   44
-#define TFT_CS    3
+#define TFT_CS    -1
 #define TFT_DC     6
 #define TFT_RST    5
 //#define TFT_BL     15      
