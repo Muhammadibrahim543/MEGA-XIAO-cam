@@ -28,15 +28,15 @@
 #define CAM_PIN_HREF    47
 #define CAM_PIN_PCLK    13
 
-// ─── Display Geometry ─────────────────────────────────────────────
-#define DISP_W  172
-#define DISP_H  320
+// ─── Display Geometry (240 x 240 ST7789) ──────────────────────────
+#define DISP_W  240
+#define DISP_H  240
 #define FEED_Y  0
-#define FEED_H  172
-#define DIV_Y   172
-#define DIV_H   4
-#define MENU_Y  176
-#define MENU_H  144
+#define FEED_H  144
+#define DIV_Y   144
+#define DIV_H   2
+#define MENU_Y  146
+#define MENU_H  94
 
 // ─── Frame Size Table ─────────────────────────────────────────────
 typedef struct { const char* label; framesize_t fs; uint16_t w, h; } FrameOption;

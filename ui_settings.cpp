@@ -95,6 +95,7 @@ void ui_init(TFT_eSPI& tft, TFT_eSprite& spFeed, TFT_eSprite& spMenu) {
     tft.init();
     tft.setRotation(0);
     tft.fillScreen(C_BG);
+    tft.setAttribute(PSRAM_ENABLE, true);
     spFeed.setColorDepth(16);
     spFeed.createSprite(DISP_W, FEED_H);
     spFeed.fillSprite(TFT_BLACK);
@@ -691,34 +692,34 @@ void ui_draw_usb_webcam(TFT_eSprite& spMenu, TFT_eSprite& spFeed, const UIState&
         snprintf(fpsNum, sizeof(fpsNum), "%lu", (unsigned long)fps);
         spFeed.setTextColor(C_GREEN, C_BG);
         spFeed.setTextDatum(MC_DATUM);
-        spFeed.drawString(fpsNum, DISP_W / 2 - 15, 60, 6);
+        spFeed.drawString(fpsNum, DISP_W / 2 - 15, 48, 6);
         spFeed.setTextColor(C_ACCENT2, C_BG);
         spFeed.setTextSize(1);
-        spFeed.drawString("FPS", DISP_W / 2 + 35, 65);
+        spFeed.drawString("FPS", DISP_W / 2 + 35, 53);
 
         // Resolution & Quality Card
-        spFeed.fillRect(8, 98, DISP_W - 16, 32, C_CARD);
-        spFeed.drawRoundRect(8, 98, DISP_W - 16, 32, 4, C_DIVIDER);
+        spFeed.fillRect(8, 80, DISP_W - 16, 28, C_CARD);
+        spFeed.drawRoundRect(8, 80, DISP_W - 16, 28, 4, C_DIVIDER);
         spFeed.setTextDatum(TL_DATUM);
         spFeed.setTextColor(C_ACCENT, C_CARD);
         char resBuf[32];
         snprintf(resBuf, sizeof(resBuf), "%s", FRAME_OPTIONS[cs.wcFrameIdx].label);
-        spFeed.drawString(resBuf, 14, 102);
+        spFeed.drawString(resBuf, 14, 84);
 
         char qBuf[32];
         snprintf(qBuf, sizeof(qBuf), "Quality: Q%d", cs.quality);
         spFeed.setTextColor(C_LTGREY, C_CARD);
-        spFeed.drawString(qBuf, 14, 116);
+        spFeed.drawString(qBuf, 14, 96);
 
         // Audio Status badge
         if (audioActive) {
-            spFeed.fillRect(8, 136, DISP_W - 16, 18, 0x0A24);
+            spFeed.fillRect(8, 114, DISP_W - 16, 18, 0x0A24);
             spFeed.setTextColor(C_GREEN, 0x0A24);
-            spFeed.drawString("MIC: 16kHz I2S [TX]", 14, 140);
+            spFeed.drawString("MIC: 16kHz I2S [TX]", 14, 118);
         } else {
-            spFeed.fillRect(8, 136, DISP_W - 16, 18, C_PANEL);
+            spFeed.fillRect(8, 114, DISP_W - 16, 18, C_PANEL);
             spFeed.setTextColor(C_GREY, C_PANEL);
-            spFeed.drawString("MIC: MUTED", 14, 140);
+            spFeed.drawString("MIC: MUTED", 14, 118);
         }
     } else {
         spFeed.setTextDatum(MC_DATUM);

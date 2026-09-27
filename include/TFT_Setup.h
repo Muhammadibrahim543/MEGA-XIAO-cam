@@ -17,7 +17,7 @@
 //#define TFT_BL     15      
 
 // ── Speed ───────────────────────────────────
-#define SPI_FREQUENCY       80000000
+#define SPI_FREQUENCY       40000000
 #define SPI_READ_FREQUENCY   6000000
 
 // ── Fonts (optional but useful) ─────────────

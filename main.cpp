@@ -1494,6 +1494,7 @@ void setup() {
     tft.setRotation(currentRotation);
     tft.fillScreen(TFT_BLACK);
     tft.setSwapBytes(true);
+    tft.setAttribute(PSRAM_ENABLE, true);
     power_manager_init(&tft);
 
     ui_eeprom_load(camCfg);
