@@ -14,7 +14,201 @@
                 if (img) img.src = '/video_feed?t=' + Date.now();
             }, 1200);
         };
-    </script>
+    
+    // ----- WHISPER FLOW VOICE AGENT -----
+    let voiceIsRecording = false;
+    let lastKnownHistoryItem = null;
+    let lastVoiceStatusHtml = "";
+    let lastVoiceBtnState = "";
+
+    function handleVoiceTelemetry(voice) {
+        if (!voice) return;
+        voiceIsRecording = !!voice.recording;
+        const btn = document.getElementById('web-record-btn');
+        const icon = document.getElementById('web-record-icon');
+        const text = document.getElementById('web-record-text');
+        const status = document.getElementById('dictation-status-bar');
+
+        // Only update Button DOM when state actually changes
+        const currentBtnState = voice.recording ? (voice.continuous ? "continuous" : "recording") : "idle";
+        if (currentBtnState !== lastVoiceBtnState) {
+            lastVoiceBtnState = currentBtnState;
+            if (btn && icon && text) {
+                if (currentBtnState === "continuous") {
+                    btn.style.background = "#f59e0b";
+                    btn.style.color = "#000";
+                    icon.className = "fas fa-stop";
+                    text.innerText = "Stop Continuous Dictation (Ctrl + Alt)";
+                } else if (currentBtnState === "recording") {
+                    btn.style.background = "#ef4444";
+                    btn.style.color = "#fff";
+                    icon.className = "fas fa-stop";
+                    text.innerText = "Stop Dictation (Ctrl + Alt)";
+                } else {
+                    btn.style.background = "#0284c7";
+                    btn.style.color = "#fff";
+                    icon.className = "fas fa-microphone";
+                    text.innerText = "Start Dictation (Ctrl + Alt)";
+                }
+            }
+        }
+
+        // Only update Status DOM when status text actually changes
+        if (status) {
+            let targetStatusHtml = "";
+            if (voice.recording) {
+                if (voice.continuous) {
+                    targetStatusHtml = '<span style="color:#f59e0b;"><i class="fas fa-circle" style="animation:blink 1s infinite"></i> <strong>Continuous Recording Active</strong> [Ctrl + Alt to Finish]</span>';
+                } else {
+                    targetStatusHtml = '<span style="color:#ef4444;"><i class="fas fa-circle" style="animation:blink 1s infinite"></i> <strong>Recording...</strong> [Release or Ctrl + Alt to Finish]</span>';
+                }
+            } else {
+                const sText = voice.status || 'Ready';
+                targetStatusHtml = `<i class="fas fa-info-circle"></i> Status: ${sText}`;
+            }
+
+            if (targetStatusHtml !== lastVoiceStatusHtml) {
+                lastVoiceStatusHtml = targetStatusHtml;
+                status.innerHTML = targetStatusHtml;
+            }
+        }
+
+        // Trigger history update ONLY when new dictation item completes
+        if (voice.latest_item && (!lastKnownHistoryItem || lastKnownHistoryItem.time !== voice.latest_item.time || lastKnownHistoryItem.text !== voice.latest_item.text)) {
+            lastKnownHistoryItem = voice.latest_item;
+            fetchVoiceHistory();
+        }
+    }
+
+    function initVoiceAgent() {
+        fetchVoiceConfig();
+        fetchVoiceStatus();
+        fetchVoiceHistory();
+        // Real-time SSE handles voice updates
+    }
+
+    function fetchVoiceConfig() {
+        fetch('/api/voice/config')
+        .then(r => r.json())
+        .then(data => {
+            if (data.masked_key) {
+                document.getElementById('gemini-key-input').placeholder = "Key Configured: " + data.masked_key;
+                document.getElementById('key-save-status').innerHTML = '<span style="color:#22c55e"><i class="fas fa-check-circle"></i> Gemini API Key is Active</span>';
+            } else {
+                document.getElementById('key-save-status').innerHTML = '<span style="color:#22c55e"><i class="fas fa-check-circle"></i> Default Key Active</span>';
+            }
+            if (data.model) document.getElementById('gemini-model-select').value = data.model;
+            if (data.auto_paste !== undefined) document.getElementById('voice-autopaste').checked = data.auto_paste;
+        })
+        .catch(err => console.log("Voice config error:", err));
+    }
+
+    function fetchVoiceStatus() {
+        fetch('/api/voice/status')
+        .then(r => r.json())
+        .then(data => {
+            handleVoiceTelemetry(data);
+        })
+        .catch(() => {});
+    }
+
+    function toggleVoiceRecording() {
+        fetch('/api/voice/toggle', { method: 'POST' })
+        .then(r => r.json())
+        .then(res => {
+            fetchVoiceStatus();
+            fetchVoiceHistory();
+        });
+    }
+
+    function saveVoiceSettings() {
+        const key = document.getElementById('gemini-key-input').value.trim();
+        const model = document.getElementById('gemini-model-select').value;
+        const autoPaste = document.getElementById('voice-autopaste').checked;
+        const statusEl = document.getElementById('key-save-status');
+
+        statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+
+        const payload = { model: model, auto_paste: autoPaste };
+        if (key) payload.gemini_api_key = key;
+
+        fetch('/api/voice/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(res => {
+            if (res.success) {
+                statusEl.innerHTML = '<span style="color:#22c55e"><i class="fas fa-check-circle"></i> Settings Saved Successfully!</span>';
+                document.getElementById('gemini-key-input').value = '';
+                fetchVoiceConfig();
+            } else {
+                statusEl.innerHTML = '<span style="color:#f87171">Failed to save settings</span>';
+            }
+        })
+        .catch(err => {
+            statusEl.innerHTML = '<span style="color:#f87171">Error: ' + err.message + '</span>';
+        });
+    }
+
+    function toggleKeyVisibility() {
+        const input = document.getElementById('gemini-key-input');
+        const icon = document.getElementById('key-eye-icon');
+        if (input.type === 'password') {
+            input.type = 'text';
+            icon.className = 'fas fa-eye-slash';
+        } else {
+            input.type = 'password';
+            icon.className = 'fas fa-eye';
+        }
+    }
+
+    function fetchVoiceHistory() {
+        fetch('/api/voice/history')
+        .then(r => r.json())
+        .then(data => {
+            const list = document.getElementById('voice-history-list');
+            if (!list) return;
+            if (!data.history || data.history.length === 0) {
+                list.innerHTML = '<div style="text-align: center; color: var(--text-muted); font-size: 12px; padding: 25px;">No transcriptions yet. Press Ctrl+Alt to speak!</div>';
+                return;
+            }
+
+            let html = '';
+            data.history.forEach(item => {
+                const escapedText = item.text.replace(/'/g, "\\'");
+                html += `
+                    <div style="background: #080c14; border: 1px solid #1a2536; border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; font-size: 10px; color: var(--text-muted);">
+                            <span><i class="fas fa-clock"></i> ${item.time} (${item.duration})</span>
+                            <button onclick="navigator.clipboard.writeText('${escapedText}'); alert('Copied to clipboard!')" style="padding: 2px 6px; font-size: 10px; background: #1a2536; color:#fff; border:none; border-radius:3px; cursor:pointer;"><i class="fas fa-copy"></i></button>
+                        </div>
+                        <div style="color: #f8fafc; font-size: 12px; line-height: 1.4;">${item.text}</div>
+                    </div>
+                `;
+            });
+            list.innerHTML = html;
+        })
+        .catch(() => {});
+    }
+
+    function clearVoiceHistory() {
+        fetch('/api/voice/clear_history', { method: 'POST' })
+        .then(() => fetchVoiceHistory());
+    }
+
+    function copyTestBox() {
+        const val = document.getElementById('dictation-test-box').value;
+        if (!val) return;
+        navigator.clipboard.writeText(val);
+        alert("Copied to clipboard!");
+    }
+
+    window.addEventListener('load', () => {
+        initVoiceAgent();
+    });
+</script>
     <style>
         :root {
             --bg: #080a0f;
@@ -1558,6 +1752,9 @@
                 <div class="s-tab" onclick="switchStudioTab('pro-isp')">
                     <i class="fas fa-magic" style="color: #00d4ff;"></i> Pro ISP Studio (PC AI)
                 </div>
+                <div class="s-tab" onclick="switchStudioTab('voice')" id="stab-voice">
+                    <i class="fas fa-microphone-lines" style="color: #38bdf8;"></i> Whisper Flow (Voice)
+                </div>
                 <div class="s-tab" onclick="switchStudioTab('files')">
                     <i class="fas fa-folder-open"></i> Camera SD Files
                 </div>
@@ -1832,6 +2029,82 @@
 
 
                 <!-- TAB 2: CAMERA SD CARD FILE MANAGER -->
+                <!-- WHISPER FLOW VOICE AGENT TAB -->
+                <div id="tab-voice" class="tab-panel">
+                    <div class="card-grid" style="grid-template-columns: 1fr 1fr;">
+                        <!-- Left: Config & Live Playground -->
+                        <div style="display:flex; flex-direction:column; gap:16px;">
+                            <div class="dash-card">
+                                <div class="dash-card-title"><i class="fas fa-key" style="color:var(--primary)"></i> Google AI Studio API Key</div>
+                                <div style="margin-top: 10px;">
+                                    <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 5px;">
+                                        Gemini API Key (<a href="https://aistudio.google.com/" target="_blank" style="color: var(--primary); text-decoration: none;">Get Free Key from Google AI Studio ↗</a>)
+                                    </label>
+                                    <div style="display: flex; gap: 8px;">
+                                        <input type="password" id="gemini-key-input" placeholder="Paste AIzaSy... key here" style="flex: 1; background: #080c14; border: 1px solid #1a2536; padding: 8px 12px; border-radius: 6px; color: #fff; font-family: monospace; outline: none; font-size: 12px;">
+                                        <button type="button" onclick="toggleKeyVisibility()" style="background:#1a2536; padding: 0 12px; border:none; border-radius:6px; color:#fff; cursor:pointer;"><i class="fas fa-eye" id="key-eye-icon"></i></button>
+                                        <button onclick="saveVoiceSettings()" style="background:var(--primary); color:#000; font-weight:bold; border:none; padding:8px 16px; border-radius:6px; cursor:pointer;"><i class="fas fa-save"></i> Save</button>
+                                    </div>
+                                    <div id="key-save-status" style="font-size: 11px; margin-top: 6px; min-height: 16px;"></div>
+                                </div>
+                                <div style="margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div>
+                                        <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Model</label>
+                                        <select id="gemini-model-select" style="width: 100%; padding: 8px; background: #27272a; color: #fff; border: 1px solid #3f3f46; border-radius: 4px;">
+                                            <option value="gemini-3.5-transcribe">Gemini 3.5 Transcribe (Fastest ~1s, Recommended)</option>
+                                            <option value="gemini-3.6-flash">Gemini 3.6 Flash (High Accuracy / Multilingual)</option>
+                                            <option value="gemini-flash-latest">Gemini Flash Latest</option>
+                                            <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Hotkey</label>
+                                        <input type="text" value="Ctrl + Alt" disabled style="width: 100%; background: #080c14; border: 1px solid #1a2536; padding: 6px 10px; border-radius: 5px; color: var(--primary); font-weight: bold; text-align: center; font-size: 12px;">
+                                    </div>
+                                </div>
+                                <div style="margin-top: 12px; display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="voice-autopaste" checked style="accent-color: var(--primary); width: 15px; height: 15px; cursor: pointer;">
+                                    <label for="voice-autopaste" style="font-size: 12px; color: var(--text-main); cursor: pointer;">
+                                        Auto-Paste into active window (Ctrl+V) immediately after transcribing
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="dash-card">
+                                <div class="dash-card-title"><i class="fas fa-microphone-alt" style="color:var(--primary)"></i> Live Dictation Playground</div>
+                                <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
+                                    নিচের বক্সে কার্সর রেখে কীবোর্ডে <kbd style="background:#1a2536; border:1px solid #222b3d; border-radius:3px; padding:1px 5px; color:var(--primary);">Ctrl + Alt</kbd> চাপুন অথবা নিচের বাটনে ক্লিক করে কথা বলুন:
+                                </p>
+                                <button id="web-record-btn" onclick="toggleVoiceRecording()" style="width: 100%; padding: 12px; font-size: 14px; font-weight: bold; display: flex; align-items: center; justify-content: center; gap: 8px; background: #0284c7; color: #fff; border: none; border-radius: 6px; cursor: pointer; margin-bottom: 10px;">
+                                    <i class="fas fa-microphone" id="web-record-icon"></i> <span id="web-record-text">Start Dictation (Ctrl + Alt)</span>
+                                </button>
+                                <textarea id="dictation-test-box" rows="4" placeholder="Your spoken words (বাংলা বা English) will automatically appear right here..." style="width: 100%; background: #080c14; border: 1px solid #1a2536; border-radius: 6px; padding: 10px; color: #fff; font-family: inherit; font-size: 13px; resize: vertical; outline: none; box-sizing: border-box;"></textarea>
+                                <div style="display: flex; justify-content: space-between; margin-top: 8px; align-items: center; height: 32px; min-height: 32px; max-height: 32px; overflow: hidden;">
+                                    <div id="dictation-status-bar" style="font-size: 11px; color: var(--text-muted); flex: 1; margin-right: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 32px;"><i class="fas fa-info-circle"></i> Ready</div>
+                                    <div style="display:flex; gap:6px; flex-shrink: 0;">
+                                        <button onclick="copyTestBox()" style="padding: 4px 10px; font-size: 11px; background: #1a2536; color:#fff; border:none; border-radius:4px; cursor:pointer;"><i class="fas fa-copy"></i> Copy</button>
+                                        <button onclick="document.getElementById('dictation-test-box').value = ''" style="padding: 4px 10px; font-size: 11px; background: #1a2536; color:#fff; border:none; border-radius:4px; cursor:pointer;"><i class="fas fa-trash"></i> Clear</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right: History & Instructions -->
+                        <div style="display:flex; flex-direction:column; gap:16px;">
+                            <div class="dash-card" style="flex:1; display:flex; flex-direction:column;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                    <div class="dash-card-title"><i class="fas fa-clock-rotate-left" style="color:var(--primary)"></i> Dictation History</div>
+                                    <button onclick="clearVoiceHistory()" style="padding: 3px 8px; font-size: 10px; background: transparent; border: 1px solid #222b3d; color: var(--text-muted); border-radius: 4px; cursor: pointer;"><i class="fas fa-trash"></i> Clear</button>
+                                </div>
+                                <div id="voice-history-list" style="flex: 1; overflow-y: auto; max-height: 480px; min-height: 280px; display:flex; flex-direction:column; gap: 8px;">
+                                    <div style="text-align: center; color: var(--text-muted); font-size: 12px; padding: 25px;">No transcriptions yet. Press Ctrl+Alt to speak!</div>
+                                </div>
+                            </div>
+
+                            </div>
+                    </div>
+                </div>
+
                 <div id="tab-files" class="tab-panel">
                     <div class="file-box">
                         <div class="file-toolbar">
@@ -2213,9 +2486,20 @@
         function handleTelemetry(data) {
             if (!data) return;
 
+            // Instant Real-time Voice Agent Update (50ms SSE Stream)
+            if (data.voice) {
+                handleVoiceTelemetry(data.voice);
+            }
+
             // Update raw display
             const rawEl = document.getElementById('raw-json-display');
-            if (rawEl) rawEl.innerText = JSON.stringify(data, null, 2);
+            if (rawEl) {
+                const nowMs = Date.now();
+                if (!window._lastRawUpdate || nowMs - window._lastRawUpdate > 1000) {
+                    window._lastRawUpdate = nowMs;
+                    rawEl.innerText = JSON.stringify(data, null, 2);
+                }
+            }
 
             // Update Cam & Main connection badges
             if (data.cam_connected !== undefined && data.cam_connected !== isCamConn) {
@@ -2499,6 +2783,8 @@
         });
         const CHANNELS = ["433.050", "433.250", "433.500", "433.750"];
 
+        let lastTftScreenKey = "";
+
         function updateVirtualTFT(state) {
             const appMode = state.appMode !== undefined ? state.appMode : (state.main_appMode !== undefined ? state.main_appMode : 0);
             const navState = state.navState !== undefined ? state.navState : (state.main_navState !== undefined ? state.main_navState : 0);
@@ -2523,7 +2809,6 @@
             const ftrM = document.getElementById('wt-ftr-m');
             const ftrR = document.getElementById('wt-ftr-r');
             const body = document.getElementById('wt-body');
-            const ledL = document.getElementById('wt-led-l');
             const ledR = document.getElementById('wt-led-r');
 
             if (hdrBatt) hdrBatt.innerText = Number(vBatt).toFixed(1) + "V";
@@ -2536,6 +2821,9 @@
                 }
             }
 
+            const screenKey = `${appMode}_${navState}_${state.lrPage || 0}`;
+            const isScreenTransition = (screenKey !== lastTftScreenKey);
+
             if (navState === 0) { // CLOCK / IDLE
                 if (hdrTitle) hdrTitle.innerText = "ESP32 CLOCK";
                 if (ftrL) ftrL.innerText = "";
@@ -2543,40 +2831,43 @@
                 if (ftrR) ftrR.innerText = "";
                 const d = new Date();
                 const timeStr = d.getHours().toString().padStart(2,'0') + ":" + d.getMinutes().toString().padStart(2,'0');
-                if (body) {
+                if (body && isScreenTransition) {
                     body.innerHTML = `<div class="clock-time">${timeStr}</div><div class="clock-date">SYSTEM READY &bull; STANDBY</div>`;
                 }
-            } 
+            }
             else if (navState === 1) { // MAIN MENU
                 if (hdrTitle) hdrTitle.innerText = "MAIN MENU";
                 if (ftrL) ftrL.innerText = "PREV";
                 if (ftrM) ftrM.innerText = "ENTER";
                 if (ftrR) ftrR.innerText = "NEXT";
-                
+
                 let sel = Math.max(0, Math.min(MENU_NAMES.length - 1, menuSel));
                 let pageNum = Math.floor(sel / 9) + 1;
                 let totalPages = Math.ceil(MENU_NAMES.length / 9);
                 let startIdx = Math.floor(sel / 9) * 9;
-                
-                let html = `<div style="display:flex; justify-content:space-between; font-size:9px; color:#88a0c0; margin-bottom:4px; padding:0 2px;">
-                    <span>MODULES (${sel + 1}/${MENU_NAMES.length})</span>
-                    <span>PAGE ${pageNum}/${totalPages}</span>
-                </div>`;
-                html += '<div class="menu-grid">';
-                for (let i = 0; i < 9; i++) {
-                    let idx = startIdx + i;
-                    if (idx < MENU_NAMES.length) {
-                        let active = (idx === sel) ? "active" : "";
-                        html += `<div class="menu-icon ${active}" onclick="setMainMode(${idx})" style="cursor:pointer;" title="Click to Launch #${idx}: ${MENU_NAMES[idx]}">
-                            <i class="fas ${MENU_ICONS[idx]}"></i>
-                            <span style="font-size:8.5px; font-weight:600;">${MENU_NAMES[idx]}</span>
-                        </div>`;
-                    } else {
-                        html += `<div class="menu-icon" style="opacity:0.2;"><i class="fas fa-ellipsis-h"></i></div>`;
+
+                if (body && (isScreenTransition || body.dataset.sel !== String(sel))) {
+                    body.dataset.sel = String(sel);
+                    let html = `<div style="display:flex; justify-content:space-between; font-size:9px; color:#88a0c0; margin-bottom:5px;">
+                        <span>MODULES (${sel + 1}/${MENU_NAMES.length})</span>
+                        <span>PAGE ${pageNum}/${totalPages}</span>
+                    </div>`;
+                    html += '<div class="menu-grid">';
+                    for (let i = 0; i < 9; i++) {
+                        let idx = startIdx + i;
+                        if (idx < MENU_NAMES.length) {
+                            let active = (idx === sel) ? "active" : "";
+                            html += `<div class="menu-icon ${active}" onclick="setMainMode(${idx})" style="cursor:pointer;">
+                                <i class="fas ${MENU_ICONS[idx]}"></i>
+                                <span style="font-size:8.5px; font-weight:600;">${MENU_NAMES[idx]}</span>
+                            </div>`;
+                        } else {
+                            html += `<div class="menu-icon" style="opacity:0.2;"><i class="fas fa-ellipsis-h"></i></div>`;
+                        }
                     }
+                    html += '</div>';
+                    body.innerHTML = html;
                 }
-                html += '</div>';
-                if (body) body.innerHTML = html;
             }
             else if (navState === 2) { // MODULE RUNNING
                 if (appMode === 16) { // LIVE RADIO
@@ -2587,30 +2878,18 @@
                         if (ftrM) ftrM.innerText = "MENU";
                         if (ftrR) ftrR.innerText = "CHAN";
                         let ch = state.lrChannel !== undefined ? state.lrChannel : (state.main_lrChannel || 0);
-                        if (body) {
+                        if (body && isScreenTransition) {
                             body.innerHTML = `
                                 <div class="lr-box">
                                     <div class="lr-chan">CHANNEL ${ch + 1}</div>
                                     <div class="lr-freq">${CHANNELS[ch % 4]} MHz</div>
                                 </div>
                                 <div class="lr-status-box">RX: STANDBY &nbsp;&bull;&nbsp; SIG: ■■■■</div>
-                                ${lrPttHeld ? '<div class="lr-tx">TRANSMITTING...</div>' : ''}
+                                <div id="tft-lr-tx-box">${lrPttHeld ? '<div class="lr-tx">TRANSMITTING...</div>' : ''}</div>
                             `;
-                        }
-                    } else {
-                        if (ftrL) ftrL.innerText = "-";
-                        if (ftrM) ftrM.innerText = "BACK";
-                        if (ftrR) ftrR.innerText = "+";
-                        if (body) {
-                            body.innerHTML = `
-                                <div style="font-weight:bold; color:var(--tft-yellow); margin-bottom:8px; text-align:center;">RADIO SETTINGS</div>
-                                <div class="set-list">
-                                    <div class="set-row"><span>Mic Gain</span> <span class="set-val">${state.lrMicGain || state.main_lrMicGain || 0}</span></div>
-                                    <div class="set-row"><span>Vol Gain</span> <span class="set-val">${state.lrVolGain || state.main_lrVolGain || 1.0}</span></div>
-                                    <div class="set-row"><span>Noise Gate</span> <span class="set-val">${state.lrNoiseGate || state.main_lrNoiseGate || 0}</span></div>
-                                    <div class="set-row"><span>Squelch</span> <span class="set-val">${state.lrSquelch || state.main_lrSquelch || 0}</span></div>
-                                </div>
-                            `;
+                        } else if (body) {
+                            const txBox = document.getElementById('tft-lr-tx-box');
+                            if (txBox) txBox.innerHTML = lrPttHeld ? '<div class="lr-tx">TRANSMITTING...</div>' : '';
                         }
                     }
                 } else if (appMode === 13) { // USB MIC / USB AUDIO
@@ -2618,125 +2897,71 @@
                     if (ftrL) ftrL.innerText = "MIC";
                     if (ftrM) ftrM.innerText = "MENU";
                     if (ftrR) ftrR.innerText = "SPK";
-                    
-                    // Strictly bind to Main Device microphone metrics (Zero cross-talk from Camera)
+
                     let db = state.main_mic_db !== undefined ? state.main_mic_db : -60.0;
                     let pct = Math.max(0, Math.min(100, (db + 60.0) / 60.0 * 100));
                     let isStreaming = !!state.main_mic_active || db > -55;
-                    
-                    let spectrumHtml = `<div style="display:flex; align-items:flex-end; justify-content:space-between; height: 75px; width: 100%; margin-top: 6px; border-bottom: 1px solid #333;">`;
-                    let bands = state.main_mic_spectrum || Array(48).fill(0);
-                    for(let i=0; i<48; i++) {
-                        let h = Math.max(2, Math.min(100, (bands[i] || 0) * 1500));
-                        let color = h > 80 ? '#ef4444' : (h > 50 ? '#eab308' : '#00e5ff');
-                        spectrumHtml += `<div style="width: 3px; height: ${h}%; background: ${color}; border-radius: 2px 2px 0 0;"></div>`;
-                    }
-                    spectrumHtml += `</div>`;
-                    
-                    if (body) {
+
+                    if (body && isScreenTransition) {
+                        let spectrumHtml = `<div style="display:flex; align-items:flex-end; justify-content:space-between; height:50px; background:#080c14; padding:4px 6px; border-radius:4px; border:1px solid #1a2536; margin-bottom:8px;">`;
+                        for(let i=0; i<48; i++) {
+                            spectrumHtml += `<div id="tft-mic-bar-${i}" style="width: 3px; height: 2%; background: #00e5ff; border-radius: 2px;"></div>`;
+                        }
+                        spectrumHtml += `</div>`;
+
                         body.innerHTML = `
                             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                                <span style="font-size: 10px; font-weight:bold; color: ${isStreaming ? '#22c55e' : '#888'}; background: ${isStreaming ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)'}; padding: 2px 6px; border-radius: 4px; border: 1px solid ${isStreaming ? 'rgba(34,197,94,0.4)' : '#333'};">
-                                    <i class="fas fa-circle" style="font-size:7px; vertical-align:middle; margin-right:3px;"></i>${isStreaming ? 'MIC ON (TX)' : 'MIC STANDBY'}
+                                <span id="tft-mic-status" style="font-size: 10px; font-weight:bold; color: ${isStreaming ? '#22c55e' : '#888'};">
+                                    <i class="fas fa-circle" style="font-size:7px; vertical-align:middle; margin-right:3px;"></i> ${isStreaming ? 'INMP441 ACTIVE' : 'MIC READY'}
                                 </span>
-                                <span style="font-size: 10px; color: var(--tft-yellow); font-family: monospace;">INMP441</span>
+                                <span style="font-size: 10px; color: var(--tft-yellow); font-family: monospace;">INMP441 I2S</span>
                             </div>
                             ${spectrumHtml}
-                            <div style="display:flex; justify-content:space-between; margin-top: 8px; font-size: 11px; color: #fff;">
+                            <div style="display:flex; justify-content:space-between; margin-top: 8px; font-size: 11px; color: #aaa;">
                                 <span>Signal Level</span>
-                                <span style="font-family:monospace; color:${db > -45 ? 'var(--tft-accent)' : '#888'};">${db.toFixed(1)} dB</span>
+                                <span id="tft-mic-db-val" style="font-family:monospace; color:${db > -45 ? 'var(--tft-accent)' : '#888'};">${db.toFixed(1)} dB</span>
                             </div>
-                            <div style="height: 6px; width: 100%; background: #222; border-radius: 3px; margin-top: 4px; overflow:hidden;">
-                                <div style="height: 100%; width: ${pct}%; background: ${pct > 80 ? '#ef4444' : (pct > 50 ? '#eab308' : '#00e5ff')}; border-radius: 3px; transition: width 0.08s;"></div>
-                            </div>
-                        `;
-                    }
-                } else if (appMode === 0) { // GPS
-                    if (hdrTitle) hdrTitle.innerText = "GPS NAVIGATOR";
-                    if (ftrL) ftrL.innerText = "-";
-                    if (ftrM) ftrM.innerText = "MENU";
-                    if (ftrR) ftrR.innerText = "+";
-                    const lat = state.gpsLat || state.main_gpsLat || 0;
-                    const lon = state.gpsLon || state.main_gpsLon || 0;
-                    const spd = state.gpsSpeed || state.main_gpsSpeed || 0;
-                    const alt = state.gpsAlt || state.main_gpsAlt || 0;
-                    const sats = state.gpsSats || state.main_gpsSats || 0;
-                    if (body) {
-                        body.innerHTML = `
-                            <div style="font-family: monospace; font-size: 13px; color: var(--tft-accent); padding-top: 6px;">
-                                <div>LAT: ${lat.toFixed(5)}</div>
-                                <div>LON: ${lon.toFixed(5)}</div>
-                                <div style="margin-top:10px; font-size:16px; font-weight:bold; color:var(--tft-green);">SPD: ${spd.toFixed(1)} km/h</div>
-                                <div style="margin-top:6px;">ALT: ${alt.toFixed(1)} m</div>
-                                <div style="margin-top:14px; text-align:center; font-size:11px; color:#888;">SATS: ${sats}</div>
+                            <div style="height: 6px; width: 100%; background: #222; border-radius: 3px; margin-top: 4px; overflow: hidden;">
+                                <div id="tft-mic-lvl-bar" style="height: 100%; width: ${pct}%; background: ${pct > 80 ? '#ef4444' : (pct > 50 ? '#eab308' : '#22c55e')}; transition: width 0.05s ease;"></div>
                             </div>
                         `;
+                    } else if (body) {
+                        // Smoothly update values without rebuilding DOM
+                        const dbValEl = document.getElementById('tft-mic-db-val');
+                        if (dbValEl) {
+                            dbValEl.innerText = db.toFixed(1) + " dB";
+                            dbValEl.style.color = db > -45 ? 'var(--tft-accent)' : '#888';
+                        }
+                        const lvlBarEl = document.getElementById('tft-mic-lvl-bar');
+                        if (lvlBarEl) {
+                            lvlBarEl.style.width = pct + "%";
+                            lvlBarEl.style.background = pct > 80 ? '#ef4444' : (pct > 50 ? '#eab308' : '#22c55e');
+                        }
+                        let bands = state.main_mic_spectrum || [];
+                        for(let i=0; i<Math.min(48, bands.length); i++) {
+                            const bEl = document.getElementById(`tft-mic-bar-${i}`);
+                            if (bEl) {
+                                let h = Math.max(2, Math.min(100, (bands[i] || 0) * 1500));
+                                bEl.style.height = h + "%";
+                                bEl.style.background = h > 80 ? '#ef4444' : (h > 50 ? '#eab308' : '#00e5ff');
+                            }
+                        }
                     }
-                } else if (appMode === 1) { // IMU
-                    if (hdrTitle) hdrTitle.innerText = "IMU SENSOR";
-                    if (ftrL) ftrL.innerText = "CAL";
-                    if (ftrM) ftrM.innerText = "MENU";
-                    if (ftrR) ftrR.innerText = "ZERO";
-                    const pitch = state.imuPitch || state.main_imuPitch || 0;
-                    const roll = state.imuRoll || state.main_imuRoll || 0;
-                    const yaw = state.imuYaw || state.main_imuYaw || 0;
-                    if (body) {
-                        body.innerHTML = `
-                            <div style="text-align: center; margin-top: 6px;">
-                                <div style="font-size:11px; color:#888;">PITCH</div>
-                                <div style="font-size:20px; color:#0f0; font-weight:bold;">${Math.round(pitch)}°</div>
-                                <div style="font-size:11px; color:#888; margin-top:6px;">ROLL</div>
-                                <div style="font-size:20px; color:#0cf; font-weight:bold;">${Math.round(roll)}°</div>
-                                <div style="font-size:11px; color:#888; margin-top:6px;">YAW</div>
-                                <div style="font-size:20px; color:#f0f; font-weight:bold;">${Math.round(yaw)}°</div>
-                            </div>
-                        `;
-                    }
-                } else if (appMode === 17) {
-                    let title = "ESP-NOW LIVE VIDEO";
-                    if (hdrTitle) hdrTitle.innerText = title;
-                    if (ftrL) ftrL.innerText = "BACK";
-                    if (ftrM) ftrM.innerText = "PAUSE";
-                    if (ftrR) ftrR.innerText = "NEXT";
-                    const rxFps = (state.espnow_rx_fps || state.main_espnow_rx_fps || "14.5");
-                    const rxLoss = (state.espnow_rx_loss || state.main_espnow_rx_loss || "0%");
-                    if (body) {
-                        body.innerHTML = `
-                            <div style="background: #020813; color: #00d4ff; border: 1px solid rgba(0,212,255,0.4); border-radius: 4px; height: 100%; padding: 8px; font-family: 'Share Tech Mono', monospace; display: flex; flex-direction: column; justify-content: space-between;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0,212,255,0.2); padding-bottom: 4px;">
-                                    <span style="color: #00e676; font-weight: bold;"><i class="fas fa-satellite-dish"></i> LIVE RX</span>
-                                    <span style="color: #ffb703; font-size: 11px;">CH 1 (2.4G)</span>
-                                </div>
-                                <div style="text-align: center; margin: 4px 0;">
-                                    <div style="font-size: 26px; font-weight: bold; color: #fff; text-shadow: 0 0 10px rgba(0,212,255,0.7);">${rxFps} <span style="font-size: 13px; color: #00d4ff;">FPS</span></div>
-                                    <div style="font-size: 10px; color: #aaa; margin-top: 3px;">RES: 240x176 HQVGA</div>
-                                    <div style="font-size: 10px; color: #00e676; margin-top: 3px;"><i class="fas fa-check-circle"></i> PACKET LOSS: ${rxLoss}</div>
-                                </div>
-                                <div style="background: rgba(0,212,255,0.08); padding: 5px; border-radius: 3px; font-size: 9px; color: #8ecae6; text-align: center;">
-                                    <i class="fas fa-wifi" style="color: #00e676;"></i> STREAMING FROM XIAO CAM
-                                </div>
-                            </div>
-                        `;
-                    }
-                } else {
+                } else if (isScreenTransition && body) {
                     let title = APP_MODE_NAMES[appMode] || MENU_NAMES[appMode] || ("MODULE " + appMode);
                     if (hdrTitle) hdrTitle.innerText = title;
-                    if (ftrL) ftrL.innerText = "PREV";
-                    if (ftrM) ftrM.innerText = "SEL";
-                    if (ftrR) ftrR.innerText = "NEXT";
-                    if (body) {
-                        body.innerHTML = `
-                            <div style="background: #000; color: #0f0; border: 1px solid #333; height: 100%; padding: 6px; font-family: monospace; overflow: hidden; position: relative;">
-                                <div>&gt; INIT ${title}</div>
-                                <div>&gt; SYSTEM CHECK... OK</div>
-                                <div>&gt; SENSORS... READY</div>
-                                <div style="margin-top: 15px;">[ ${title} MODULE ACTIVE ]</div>
-                                <div style="position: absolute; bottom: 5px; left: 5px;">MODE ID: ${appMode}<span style="animation: blink 1s infinite;">_</span></div>
-                            </div>
-                        `;
-                    }
+                    body.innerHTML = `
+                        <div style="background: #000; color: #0f0; border: 1px solid #333; height: 100%; padding: 6px; font-family: monospace; font-size: 11px;">
+                            <div>&gt; INIT ${title}</div>
+                            <div>&gt; SYSTEM CHECK... OK</div>
+                            <div style="margin-top: 15px;">[ ${title} MODULE ACTIVE ]</div>
+                            <div style="position: absolute; bottom: 5px; left: 5px;">MODE ID: ${appMode}</div>
+                        </div>
+                    `;
                 }
             }
+
+            lastTftScreenKey = screenKey;
         }
 
         // Live Video Rotation & Fit Control
@@ -3129,8 +3354,14 @@
 
         // Global Keyboard Handler for Dual Device Navigation
         window.addEventListener('keydown', function(e) {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+            if (e.ctrlKey || e.altKey || e.metaKey) return; // Ignore any modifier combo (Ctrl+Alt+Space, Ctrl+V, etc.)
+
             const key = e.key.toLowerCase();
+            // Prevent spacebar or arrows from scrolling the dashboard page
+            if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
+                e.preventDefault();
+            }
 
             if (controlTarget === 'wt') {
                 switch(key) {
@@ -3195,7 +3426,8 @@
         });
 
         window.addEventListener('keyup', function(e) {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+            if (e.ctrlKey || e.altKey || e.metaKey) return;
             const key = e.key.toLowerCase();
 
             if (controlTarget === 'wt') {

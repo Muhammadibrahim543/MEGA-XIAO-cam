@@ -1,3 +1,12 @@
+import ctypes
+import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except AttributeError:
+        pass
+import traceback
 #!/usr/bin/env python3
 """
 ═══════════════════════════════════════════════════════════════════════════════
@@ -24,6 +33,12 @@ import cv2
 import serial
 import serial.tools.list_ports
 import sounddevice as sd
+import io
+import wave
+import requests
+import pyperclip
+import keyboard
+import tkinter as tk
 from flask import Flask, render_template_string, jsonify, request, Response, send_file
 
 try:
@@ -1130,6 +1145,26 @@ def get_telemetry_snapshot():
     combined["main_mic_spectrum"] = main_smooth_bands.tolist()
     combined["main_mic_active"] = main_mic_active
 
+    # Dedicated keys for Voice Agent (Real-time Whisper Flow)
+    try:
+        combined["voice"] = {
+            "recording": voice_agent.is_recording if voice_agent else False,
+            "continuous": getattr(voice_agent, 'is_continuous', False) if voice_agent else False,
+            "status": voice_agent.last_status if voice_agent else "Ready",
+            "last_transcript": voice_agent.last_transcript if voice_agent else "",
+            "history_count": len(dictation_history),
+            "latest_item": dictation_history[0] if dictation_history else None
+        }
+    except Exception:
+        combined["voice"] = {
+            "recording": False,
+            "continuous": False,
+            "status": "Ready",
+            "last_transcript": "",
+            "history_count": 0,
+            "latest_item": None
+        }
+
     return combined
 
 @app.route('/api/telemetry')
@@ -1363,6 +1398,468 @@ def fs_download():
                     headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 # ─── Application Startup ────────────────────────────────────────────────────
+
+# ===========================================================================
+# WHISPER FLOW VOICE AGENT (Google Gemini Flash STT + Push-to-Talk & Continuous Mode)
+# ===========================================================================
+DEFAULT_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+DEFAULT_VOICE_CONFIG = {
+    "gemini_api_key": DEFAULT_API_KEY,
+    "model": "gemini-3.5-transcribe",
+    "hotkey": "ctrl+alt",
+    "auto_paste": True,
+    "prompt": "You are a professional speech-to-text dictation engine. Accurately transcribe the spoken audio. The speech may be in Bengali, English, or mixed (Banglish). Output ONLY the transcribed words with appropriate capitalization and punctuation. Do NOT output any explanation, markdown, prefixes, quotes, or introductory text."
+}
+
+def get_voice_config_path():
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, "voice_config.json")
+
+VOICE_CONFIG_FILE = get_voice_config_path()
+HISTORY_FILE = os.path.join(os.path.dirname(VOICE_CONFIG_FILE), "voice_history.json")
+
+def load_voice_config():
+    candidates = [
+        VOICE_CONFIG_FILE,
+        r"E:\XIAO CAM vs code\XIAO CAM\ESP32S3_CamUI\voice_config.json",
+        get_resource_path("voice_config.json")
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    cfg = DEFAULT_VOICE_CONFIG.copy()
+                    cfg.update(data)
+                    if not cfg.get("gemini_api_key"):
+                        cfg["gemini_api_key"] = DEFAULT_API_KEY
+                    return cfg
+            except Exception as e:
+                print(f"[VoiceConfig] Error reading {p}: {e}")
+
+    return DEFAULT_VOICE_CONFIG.copy()
+
+def save_voice_config(cfg):
+    targets = [
+        VOICE_CONFIG_FILE,
+        r"E:\XIAO CAM vs code\XIAO CAM\ESP32S3_CamUI\voice_config.json"
+    ]
+    success = False
+    for p in targets:
+        try:
+            d = os.path.dirname(p)
+            if d and not os.path.exists(d):
+                os.makedirs(d, exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+            success = True
+        except Exception as e:
+            print(f"[VoiceConfig] Error saving to {p}: {e}")
+    return success
+
+def load_dictation_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except: pass
+    return []
+
+def save_dictation_history(hist):
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(hist[:50], f, indent=2, ensure_ascii=False)
+    except: pass
+
+voice_config = load_voice_config()
+dictation_history = load_dictation_history()
+voice_agent = None
+
+class FloatingOverlay:
+    def __init__(self, root):
+        self.root = root
+        self.window = tk.Toplevel(root)
+        self.window.overrideredirect(True)
+        self.window.attributes("-topmost", True)
+        self.window.attributes("-alpha", 0.96)
+        self.window.configure(bg="#09090b")
+        
+        self.frame = tk.Frame(self.window, bg="#18181b", bd=1, relief=tk.SOLID, padx=16, pady=8)
+        self.frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.icon_lbl = tk.Label(self.frame, text="🎙️", font=("Segoe UI Emoji", 14), bg="#18181b", fg="#38bdf8")
+        self.icon_lbl.pack(side=tk.LEFT, padx=(0, 8))
+        
+        self.text_lbl = tk.Label(self.frame, text="Ready", font=("Segoe UI", 10, "bold"), bg="#18181b", fg="#f8fafc")
+        self.text_lbl.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.hide_timer = None
+        self.position_window()
+        self.window.withdraw()
+
+    def position_window(self):
+        # Fixed 380x46 window centered at top y=24 so it NEVER shifts or jumps across the screen
+        w = 380
+        h = 46
+        sw = self.window.winfo_screenwidth()
+        x = (sw - w) // 2
+        y = 24
+        self.window.geometry(f"{w}x{h}+{x}+{y}")
+
+    def show_listening(self):
+        self.root.after(0, self._render_listening)
+
+    def _render_listening(self):
+        if self.hide_timer:
+            self.root.after_cancel(self.hide_timer)
+            self.hide_timer = None
+        self.icon_lbl.config(text="🔴", fg="#ef4444")
+        self.text_lbl.config(text="Listening... [Release or Ctrl+Alt to finish]", fg="#ef4444")
+        self.frame.config(highlightbackground="#ef4444", highlightcolor="#ef4444", highlightthickness=1)
+        self.window.deiconify()
+
+    def show_continuous(self):
+        self.root.after(0, self._render_continuous)
+
+    def _render_continuous(self):
+        if self.hide_timer:
+            self.root.after_cancel(self.hide_timer)
+            self.hide_timer = None
+        self.icon_lbl.config(text="🔴", fg="#f59e0b")
+        self.text_lbl.config(text="Continuous Recording... [Ctrl + Alt to Finish]", fg="#f59e0b")
+        self.frame.config(highlightbackground="#f59e0b", highlightcolor="#f59e0b", highlightthickness=1)
+        self.window.deiconify()
+
+    def show_transcribing(self):
+        self.root.after(0, self._render_transcribing)
+
+    def _render_transcribing(self):
+        self.icon_lbl.config(text="⚡", fg="#38bdf8")
+        self.text_lbl.config(text="Transcribing with Gemini Flash...", fg="#38bdf8")
+        self.frame.config(highlightbackground="#38bdf8", highlightcolor="#38bdf8", highlightthickness=1)
+        self.window.deiconify()
+
+    def show_success(self, msg):
+        self.root.after(0, self._render_success, msg)
+
+    def _render_success(self, msg):
+        self.icon_lbl.config(text="✓", fg="#22c55e")
+        display_text = msg if len(msg) < 42 else msg[:39] + "..."
+        self.text_lbl.config(text=display_text, fg="#22c55e")
+        self.frame.config(highlightbackground="#22c55e", highlightcolor="#22c55e", highlightthickness=1)
+        self.window.deiconify()
+        self._schedule_hide(1800)
+
+    def show_message(self, msg, color="#f8fafc", duration=2500):
+        self.root.after(0, self._render_message, msg, color, duration)
+
+    def _render_message(self, msg, color, duration):
+        self.icon_lbl.config(text="ℹ️", fg=color)
+        self.text_lbl.config(text=msg, fg=color)
+        self.frame.config(highlightbackground=color, highlightcolor=color, highlightthickness=1)
+        self.window.deiconify()
+        self._schedule_hide(duration)
+
+    def _schedule_hide(self, delay_ms):
+        if self.hide_timer:
+            self.root.after_cancel(self.hide_timer)
+        self.hide_timer = self.root.after(delay_ms, self.window.withdraw)
+
+class WhisperFlowAgent:
+    def __init__(self, overlay):
+        self.overlay = overlay
+        self.is_recording = False
+        self.is_continuous = False
+        self.stream = None
+        self.audio_chunks = []
+        self.record_lock = threading.Lock()
+        self.start_time = 0.0
+        self.last_transcript = ""
+        self.last_status = "Ready (Ctrl+Alt or Ctrl+Alt+Space)"
+
+    def start_continuous_recording(self):
+        """Triggered by Ctrl + Alt + Space: Records continuously until Ctrl + Alt is pressed."""
+        with self.record_lock:
+            self.is_continuous = True
+            if not self.is_recording:
+                self.start_recording()
+            else:
+                if self.overlay:
+                    self.overlay.show_continuous()
+                self.last_status = "Continuous Recording... [Ctrl + Alt to finish]"
+            print("[WhisperFlow] Continuous Recording Mode ACTIVE! (Press Ctrl+Alt to transcribe & paste)")
+
+    def toggle(self):
+        """Toggle recording for web UI button."""
+        with self.record_lock:
+            if not self.is_recording:
+                self.is_continuous = False
+                self.start_recording()
+            else:
+                self.is_continuous = False
+                self.stop_recording_and_transcribe()
+
+    def start_recording(self):
+        global voice_config
+        api_key = voice_config.get("gemini_api_key", "").strip() or DEFAULT_API_KEY
+        voice_config["gemini_api_key"] = api_key
+
+        self.audio_chunks = []
+        self.is_recording = True
+        self.start_time = time.time()
+        
+        if self.is_continuous:
+            self.last_status = "Continuous Recording... [Ctrl + Alt to finish]"
+            if self.overlay:
+                self.overlay.show_continuous()
+        else:
+            self.last_status = "Recording voice... [Ctrl + Alt to finish]"
+            if self.overlay:
+                self.overlay.show_listening()
+
+        def mic_callback(indata, frames, time_info, status):
+            if self.is_recording:
+                self.audio_chunks.append(indata.copy())
+
+        try:
+            self.stream = sd.InputStream(
+                samplerate=16000,
+                channels=1,
+                dtype='int16',
+                callback=mic_callback
+            )
+            self.stream.start()
+            print("[WhisperFlow] Mic InputStream active, recording...")
+        except Exception as e:
+            self.is_recording = False
+            self.last_status = f"Mic Error: {e}"
+            if self.overlay:
+                self.overlay.show_message(f"Mic Error: {e}", color="#f87171", duration=3000)
+            print(f"[WhisperFlow] Mic Error: {e}")
+
+    def stop_recording_and_transcribe(self):
+        if not self.is_recording:
+            return
+        
+        self.is_recording = False
+        duration = time.time() - self.start_time
+        try:
+            if self.stream:
+                self.stream.stop()
+                self.stream.close()
+                self.stream = None
+        except Exception as e:
+            print(f"[WhisperFlow] Stream stop error: {e}")
+
+        print(f"[WhisperFlow] Recording stopped ({duration:.2f}s). Processing...")
+        if self.overlay:
+            self.overlay.show_transcribing()
+        self.last_status = "Transcribing with Gemini..."
+
+        threading.Thread(target=self._process_audio, args=(self.audio_chunks, duration), daemon=True).start()
+
+    def _process_audio(self, chunks, duration):
+        if not chunks or duration < 0.25:
+            if self.overlay:
+                self.overlay.show_message("Audio too short", color="#94a3b8", duration=1500)
+            self.last_status = "Audio too short"
+            return
+
+        try:
+            audio_data = np.concatenate(chunks, axis=0)
+            wav_io = io.BytesIO()
+            with wave.open(wav_io, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(audio_data.tobytes())
+            
+            wav_bytes = wav_io.getvalue()
+            b64_audio = base64.b64encode(wav_bytes).decode('utf-8')
+
+            api_key = voice_config.get("gemini_api_key", "").strip() or DEFAULT_API_KEY
+            model = voice_config.get("model", "gemini-3.5-transcribe")
+            prompt = voice_config.get("prompt", DEFAULT_VOICE_CONFIG["prompt"])
+
+            text = self._call_gemini_stt(b64_audio, api_key, model, prompt)
+            
+            if text:
+                self.last_transcript = text
+                self.last_status = f"Pasted: {text[:30]}..."
+                timestamp_str = time.strftime("%H:%M:%S")
+                new_item = {
+                    "time": timestamp_str,
+                    "duration": f"{duration:.1f}s",
+                    "text": text
+                }
+                dictation_history.insert(0, new_item)
+                if len(dictation_history) > 50:
+                    dictation_history.pop()
+                save_dictation_history(dictation_history)
+
+                if voice_config.get("auto_paste", True):
+                    pyperclip.copy(text)
+                    time.sleep(0.04)
+                    keyboard.send('ctrl+v')
+                    if self.overlay:
+                        self.overlay.show_success(f'Pasted: "{text}"')
+                else:
+                    pyperclip.copy(text)
+                    if self.overlay:
+                        self.overlay.show_success(f'Copied: "{text}"')
+                
+                try:
+                    print(f'[WhisperFlow] Transcribed: {text.encode("utf-8", errors="replace").decode("utf-8")}')
+                except:
+                    pass
+            else:
+                if self.overlay:
+                    self.overlay.show_message("No speech detected", color="#94a3b8", duration=2000)
+                self.last_status = "No speech detected"
+
+        except Exception as e:
+            err_msg = str(e)
+            print(f"[WhisperFlow] Error during transcription: {err_msg}")
+            self.last_status = f"Error: {err_msg[:45]}"
+            if self.overlay:
+                try:
+                    self.overlay.show_message(f"Error: {err_msg[:35]}", color="#f87171", duration=3500)
+                except:
+                    pass
+
+    def _call_gemini_stt(self, b64_audio, api_key, model, prompt):
+        models_to_try = [model, "gemini-3.5-transcribe", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.8-flash"]
+        clean_models = []
+        for m in models_to_try:
+            if m and m not in clean_models:
+                clean_models.append(m)
+
+        last_error = ""
+        for mod in clean_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{mod}:generateContent?key={api_key}"
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt},
+                            {
+                                "inline_data": {
+                                    "mime_type": "audio/wav",
+                                    "data": b64_audio
+                                }
+                            }
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.0,
+                    "maxOutputTokens": 400
+                }
+            }
+            try:
+                t0 = time.time()
+                print(f"[WhisperFlow] Calling model: {mod}...")
+                resp = requests.post(url, json=payload, timeout=8)
+                dur = time.time() - t0
+                if resp.status_code == 200:
+                    data = resp.json()
+                    candidates = data.get("candidates", [])
+                    if candidates and "content" in candidates[0]:
+                        parts = candidates[0]["content"].get("parts", [])
+                        if parts and "text" in parts[0]:
+                            text_res = parts[0]["text"].strip()
+                            if voice_config.get("model") != mod:
+                                voice_config["model"] = mod
+                                save_voice_config(voice_config)
+                            print(f"[WhisperFlow] Model {mod} succeeded in {dur:.2f}s!")
+                            return text_res
+                        else:
+                            print(f"[WhisperFlow] Model {mod} returned empty text (silence).")
+                            return ""
+                elif resp.status_code in (404, 503, 429):
+                    last_error = f"Model {mod} status {resp.status_code}"
+                    print(f"[WhisperFlow] {last_error}, fallback to next model...")
+                    continue
+                else:
+                    try:
+                        err_data = resp.json()
+                        last_error = err_data.get("error", {}).get("message", resp.text)
+                    except:
+                        last_error = resp.text
+                    print(f"[WhisperFlow] API error with {mod}: {last_error}")
+            except Exception as e:
+                last_error = str(e)
+                print(f"[WhisperFlow] Exception with {mod}: {last_error}")
+
+        raise RuntimeError(last_error or "All models failed")
+
+@app.route('/api/voice/status', methods=['GET'])
+def voice_status():
+    global voice_agent
+    return jsonify({
+        "recording": voice_agent.is_recording if voice_agent else False,
+        "continuous": getattr(voice_agent, 'is_continuous', False) if voice_agent else False,
+        "api_key_set": True,
+        "model": voice_config.get("model", "gemini-3.5-transcribe"),
+        "hotkey": voice_config.get("hotkey", "ctrl+alt"),
+        "auto_paste": voice_config.get("auto_paste", True),
+        "last_transcript": voice_agent.last_transcript if voice_agent else "",
+        "last_status": voice_agent.last_status if voice_agent else "Ready"
+    })
+
+@app.route('/api/voice/config', methods=['GET', 'POST'])
+def voice_config_endpoint():
+    global voice_config
+    if request.method == 'POST':
+        data = request.json or {}
+        if "gemini_api_key" in data:
+            voice_config["gemini_api_key"] = data["gemini_api_key"].strip() or DEFAULT_API_KEY
+        if "model" in data:
+            voice_config["model"] = data["model"]
+        if "auto_paste" in data:
+            voice_config["auto_paste"] = bool(data["auto_paste"])
+        if "hotkey" in data:
+            voice_config["hotkey"] = data["hotkey"]
+        
+        save_voice_config(voice_config)
+        return jsonify({"success": True, "config": {
+            "api_key_set": True,
+            "model": voice_config.get("model"),
+            "auto_paste": voice_config.get("auto_paste"),
+            "hotkey": voice_config.get("hotkey")
+        }})
+    else:
+        k = voice_config.get("gemini_api_key", "") or DEFAULT_API_KEY
+        return jsonify({
+            "api_key_set": True,
+            "masked_key": (k[:6] + "..." + k[-4:]) if len(k) > 10 else "AQ.Ab8...cJQg",
+            "model": voice_config.get("model", "gemini-3.5-transcribe"),
+            "auto_paste": voice_config.get("auto_paste", True),
+            "hotkey": voice_config.get("hotkey", "ctrl+alt")
+        })
+
+@app.route('/api/voice/toggle', methods=['POST'])
+def voice_toggle():
+    global voice_agent
+    if voice_agent:
+        voice_agent.toggle()
+        return jsonify({"success": True, "recording": voice_agent.is_recording, "continuous": voice_agent.is_continuous})
+    return jsonify({"success": False, "error": "Agent not initialized"})
+
+@app.route('/api/voice/history', methods=['GET'])
+def voice_history():
+    return jsonify({"history": dictation_history})
+
+@app.route('/api/voice/clear_history', methods=['POST'])
+def voice_clear_history():
+    dictation_history.clear()
+    save_dictation_history(dictation_history)
+    return jsonify({"success": True})
+
+
 if __name__ == '__main__':
     def open_browser():
         time.sleep(1.2)
@@ -1371,7 +1868,7 @@ if __name__ == '__main__':
         print("  * Dashboard URL: http://127.0.0.1:5000/")
         print("  * Port 1 (XIAO CAM): Default COM9 (Camera, Mic Audio, Cam Remote)")
         print("  * Port 2 (MAIN DEVICE): Separate COM port (Telemetry, RF, Main Remote)")
-        print("  * Keyboard Controls: [Arrows/WASD] Menu Nav, [Enter] OK, [Esc/B] Back")
+        print("  * Voice Shortcuts: [Ctrl+Alt] Push-to-Talk / Finish | [Ctrl+Alt+Space] Continuous")
         print("="*75 + "\n")
         webbrowser.open('http://127.0.0.1:5000/')
 
@@ -1403,6 +1900,93 @@ if __name__ == '__main__':
                 print(f"[AUTOCONNECT] {target_main} connect error:", err)
 
     threading.Thread(target=background_autoconnect, daemon=True).start()
+
+    def start_native_hotkey_listener(agent):
+        """Ultra-fast, hardware-level Windows hotkey polling loop via GetAsyncKeyState.
+           Completely immune to key-repeat collisions, Tkinter focus theft, and Python hotkey conflicts.
+        """
+        user32 = ctypes.windll.user32
+        VK_CONTROL = 0x11
+        VK_MENU = 0x12  # Alt
+        VK_SPACE = 0x20
+
+        is_down = lambda vk: (user32.GetAsyncKeyState(vk) & 0x8000) != 0
+
+        was_combo_down = False
+        combo_press_time = 0.0
+        continuous_locked = False
+
+        print("[WhisperFlow] Native Windows Hotkey Listener Active: [Ctrl+Alt+Space] Continuous | [Ctrl+Alt] Finish/PTT")
+
+        while True:
+            try:
+                c = is_down(VK_CONTROL)
+                a = is_down(VK_MENU)
+                s = is_down(VK_SPACE)
+
+                combo = c and a
+
+                if combo:
+                    if not was_combo_down:
+                        # First millisecond of Ctrl + Alt down
+                        was_combo_down = True
+                        combo_press_time = time.time()
+                        continuous_locked = False
+
+                        if s:
+                            # Ctrl + Alt + Space pressed together!
+                            continuous_locked = True
+                            agent.start_continuous_recording()
+                        elif agent.is_recording:
+                            # User was recording and pressed Ctrl + Alt to STOP and transcribe!
+                            agent.stop_recording_and_transcribe()
+                        else:
+                            # Start regular recording!
+                            agent.is_continuous = False
+                            agent.start_recording()
+                    else:
+                        # Combo is held down. If user hits spacebar now, activate continuous recording!
+                        if s and not continuous_locked:
+                            continuous_locked = True
+                            agent.start_continuous_recording()
+                else:
+                    if was_combo_down:
+                        # Keys released!
+                        was_combo_down = False
+                        held_dur = time.time() - combo_press_time
+
+                        if continuous_locked or agent.is_continuous:
+                            # Continuous mode is active: NEVER stop on key release!
+                            pass
+                        elif agent.is_recording:
+                            if held_dur >= 0.45:
+                                # User held Ctrl+Alt to speak and now let go (Push-to-Talk)
+                                print(f"[WhisperFlow] Keys released after {held_dur:.2f}s -> transcribing & pasting...")
+                                agent.stop_recording_and_transcribe()
+                            else:
+                                # User did a quick tap (< 0.45s) -> keeps recording hands-free in toggle mode!
+                                print(f"[WhisperFlow] Quick tap ({held_dur:.2f}s) -> keeping toggle recording active.")
+
+            except Exception as ex:
+                pass
+
+            time.sleep(0.02)
+
+    def init_voice():
+        global voice_agent
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            overlay = FloatingOverlay(root)
+            voice_agent = WhisperFlowAgent(overlay)
+            threading.Thread(target=start_native_hotkey_listener, args=(voice_agent,), daemon=True).start()
+            root.mainloop()
+        except Exception as e:
+            print(f"[WhisperFlow] Overlay init error: {e}")
+            voice_agent = WhisperFlowAgent(None)
+            threading.Thread(target=start_native_hotkey_listener, args=(voice_agent,), daemon=True).start()
+
+    threading.Thread(target=init_voice, daemon=True).start()
 
     use_browser = '--browser' in sys.argv or '--web' in sys.argv
 

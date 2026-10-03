@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('unified_dashboard_template.html', '.')]
+datas = [('unified_dashboard_template.html', '.'), ('voice_config.json', '.')]
 binaries = []
-hiddenimports = []
+hiddenimports = ['keyboard', 'pyperclip', 'requests', 'sounddevice', 'numpy', 'tkinter']
 tmp_ret = collect_all('webview')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
